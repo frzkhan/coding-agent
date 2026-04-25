@@ -12,6 +12,12 @@ describe("parseAgentOutput", () => {
     expect(output.toolCall?.name).toBe("glob");
   });
 
+  it("rejects tool calls that omit required arguments", () => {
+    expect(() =>
+      parseAgentOutput('{"thought":"searching","done":false,"final":"","toolCall":{"name":"search","arguments":{}}}')
+    ).toThrow(LlmError);
+  });
+
   it("parses JSON wrapped in markdown fences", () => {
     const output = parseAgentOutput(
       '```json\n{"thought":"done","done":true,"final":"finished"}\n```'
@@ -27,7 +33,7 @@ describe("parseAgentOutput", () => {
 
   it("parses JSON when a string value contains a closing brace", () => {
     const output = parseAgentOutput(
-      '{"thought":"brace } here","done":true,"final":"ok with } char","toolCall":{"name":"x","arguments":{}}}'
+      '{"thought":"brace } here","done":true,"final":"ok with } char"}'
     );
     expect(output.done).toBe(true);
     expect(output.final).toBe("ok with } char");
@@ -45,5 +51,22 @@ describe("parseAgentOutput", () => {
     const output = parseAgentOutput('{"thought":"bye","final":"All set."}');
     expect(output.done).toBe(true);
     expect(output.final).toBe("All set.");
+  });
+
+  it("drops an empty toolCall alongside a done final answer", () => {
+    const output = parseAgentOutput(
+      '{"thought":"t","done":true,"final":"No git tools exist here.","toolCall":{}}'
+    );
+    expect(output.done).toBe(true);
+    expect(output.final).toBe("No git tools exist here.");
+    expect(output.toolCall).toBeUndefined();
+  });
+
+  it("drops a toolCall without a valid name", () => {
+    const output = parseAgentOutput(
+      '{"thought":"t","done":true,"final":"Answer.","toolCall":{"name":"","arguments":{}}}'
+    );
+    expect(output.done).toBe(true);
+    expect(output.toolCall).toBeUndefined();
   });
 });

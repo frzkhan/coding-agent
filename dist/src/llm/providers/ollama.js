@@ -1,7 +1,8 @@
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
-import { streamText } from "ai";
+import { generateObject, NoObjectGeneratedError } from "ai";
 import { LlmError } from "../../errors.js";
-import { parseTextResponse, toModelMessages } from "./aiSdk.js";
+import { agentOutputSchema } from "../parseAgentOutput.js";
+import { toModelMessages } from "./aiSdk.js";
 function toTokenUsage(usage) {
     return {
         inputTokens: usage.inputTokens,
@@ -19,29 +20,35 @@ export class OllamaClient {
         this.temperature = params.temperature;
         this.provider = createOpenAICompatible({
             name: "ollama",
-            baseURL: `${params.baseUrl.replace(/\/$/, "")}/v1`
+            baseURL: `${params.baseUrl.replace(/\/$/, "")}/v1`,
+            supportsStructuredOutputs: true
         });
     }
-    async generate(messages, options = {}) {
+    async generate(messages, _options = {}) {
         try {
-            const response = streamText({
+            const response = await generateObject({
                 model: this.provider(this.model),
                 temperature: this.temperature,
-                messages: toModelMessages(messages)
+                messages: toModelMessages(messages),
+                schema: agentOutputSchema,
+                schemaName: "AgentOutput",
+                schemaDescription: "Controller response for a coding agent. If done is false and toolCall is present, toolCall.arguments must include every required argument for the selected tool. For search, provide arguments.pattern."
             });
-            let text = "";
-            for await (const chunk of response.textStream) {
-                text += chunk;
-                options.onChunk?.(chunk);
-            }
-            return parseTextResponse(text, "Ollama", toTokenUsage(await response.usage));
+            return {
+                text: response.object.done ? response.object.final : response.object.thought,
+                done: response.object.done,
+                toolCall: response.object.toolCall,
+                usage: toTokenUsage(response.usage)
+            };
         }
         catch (error) {
             if (error instanceof LlmError) {
                 throw error;
             }
             const message = error instanceof Error ? error.message : String(error);
-            throw new LlmError(`Ollama request failed: ${message}`);
+            throw new LlmError(`Ollama request failed: ${message}`, {
+                rawText: NoObjectGeneratedError.isInstance(error) ? error.text : undefined
+            });
         }
     }
 }

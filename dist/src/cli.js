@@ -60,6 +60,8 @@ function shouldPersistStepInfo(info) {
         info.startsWith("Tool failed:") ||
         info.startsWith("Tool unavailable:") ||
         info.startsWith("Rejected final answer:") ||
+        info.startsWith("Model output invalid:") ||
+        info.startsWith("Using raw model answer") ||
         info.startsWith("Model produced final answer") ||
         info.startsWith("Compacted context"));
 }

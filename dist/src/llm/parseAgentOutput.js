@@ -1,15 +1,69 @@
 import { z } from "zod";
 import { LlmError } from "../errors.js";
-const agentOutputSchema = z.object({
+const toolCallSchema = z.discriminatedUnion("name", [
+    z.object({
+        name: z.literal("readFile"),
+        arguments: z.object({ path: z.string().min(1) })
+    }),
+    z.object({
+        name: z.literal("glob"),
+        arguments: z.object({ pattern: z.string().min(1) })
+    }),
+    z.object({
+        name: z.literal("search"),
+        arguments: z.object({
+            pattern: z.string().min(1),
+            include: z.string().optional(),
+            context: z.number().int().optional(),
+            maxResults: z.number().int().optional(),
+            caseInsensitive: z.boolean().optional()
+        })
+    }),
+    z.object({
+        name: z.literal("tsWorkspaceSymbols"),
+        arguments: z.object({ query: z.string().min(1) })
+    }),
+    z.object({
+        name: z.literal("tsDefinition"),
+        arguments: z.object({
+            path: z.string().min(1),
+            line: z.number().int().min(1),
+            character: z.number().int().min(0)
+        })
+    }),
+    z.object({
+        name: z.literal("tsReferences"),
+        arguments: z.object({
+            path: z.string().min(1),
+            line: z.number().int().min(1),
+            character: z.number().int().min(0)
+        })
+    }),
+    z.object({
+        name: z.literal("writeFile"),
+        arguments: z.object({
+            path: z.string().min(1),
+            content: z.string()
+        })
+    }),
+    z.object({
+        name: z.literal("str_replace"),
+        arguments: z.object({
+            path: z.string().min(1),
+            old_string: z.string().min(1),
+            new_string: z.string()
+        })
+    }),
+    z.object({
+        name: z.literal("shell"),
+        arguments: z.object({ command: z.string().min(1) })
+    })
+]);
+export const agentOutputSchema = z.object({
     thought: z.coerce.string().default(""),
     done: z.boolean(),
     final: z.coerce.string().default(""),
-    toolCall: z
-        .object({
-        name: z.string(),
-        arguments: z.record(z.string(), z.unknown()).default({})
-    })
-        .optional()
+    toolCall: toolCallSchema.optional()
 });
 /** First top-level `{ ... }` slice, respecting strings so `}` inside values does not truncate. */
 function extractBalancedJsonObject(text, fromIndex) {

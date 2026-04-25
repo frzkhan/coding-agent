@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { runAgentLoop } from "./loop.js";
-import type { ChatMessage, LlmClient, LlmResponse } from "../llm/client.js";
+import { looksLikeContinuation, runAgentLoop } from "./loop.js";
+import { LlmError } from "../errors.js";
+import type { ChatMessage, LlmClient, LlmGenerateOptions, LlmResponse } from "../llm/client.js";
 import { ToolRegistry, type Tool } from "../tools/types.js";
 
 class SequenceClient implements LlmClient {
@@ -8,10 +9,40 @@ class SequenceClient implements LlmClient {
 
   constructor(private readonly responses: LlmResponse[]) {}
 
-  async generate(_messages: ChatMessage[]): Promise<LlmResponse> {
+  async generate(_messages: ChatMessage[], _options: LlmGenerateOptions = {}): Promise<LlmResponse> {
     const response = this.responses[this.index];
     this.index += 1;
     return response;
+  }
+}
+
+class ErrorThenDoneClient implements LlmClient {
+  private calls = 0;
+
+  async generate(): Promise<LlmResponse> {
+    this.calls += 1;
+    if (this.calls === 1) {
+      throw new LlmError("Ollama request failed: No object generated: could not parse the response.");
+    }
+    return { text: "recovered", done: true };
+  }
+}
+
+class RawTextErrorClient implements LlmClient {
+  async generate(_messages: ChatMessage[], _options: LlmGenerateOptions = {}): Promise<never> {
+    throw new LlmError("Ollama request failed: No object generated: could not parse the response.", {
+      rawText: "The label values are used only as optional location prefixes."
+    });
+  }
+}
+
+class PlanTextErrorClient implements LlmClient {
+  constructor(private readonly rawText: string) {}
+
+  async generate(_messages: ChatMessage[], _options: LlmGenerateOptions = {}): Promise<never> {
+    throw new LlmError("Ollama request failed: No object generated: could not parse the response.", {
+      rawText: this.rawText
+    });
   }
 }
 
@@ -42,7 +73,7 @@ class MutatingTool implements Tool {
 describe("runAgentLoop", () => {
   it("finishes when model returns done", async () => {
     const registry = new ToolRegistry();
-    const client = new SequenceClient([
+    const client: LlmClient = new SequenceClient([
       { text: "All done", done: true }
     ]);
 
@@ -61,7 +92,7 @@ describe("runAgentLoop", () => {
   it("runs a tool and then completes", async () => {
     const registry = new ToolRegistry();
     registry.register(new EchoTool());
-    const client = new SequenceClient([
+    const client: LlmClient = new SequenceClient([
       {
         text: "need tool",
         done: false,
@@ -86,7 +117,7 @@ describe("runAgentLoop", () => {
     const registry = new ToolRegistry();
     registry.register(new EchoTool());
     const updates: string[] = [];
-    const client = new SequenceClient([
+    const client: LlmClient = new SequenceClient([
       {
         text: "Inspecting the requested value before answering.",
         done: false,
@@ -107,6 +138,126 @@ describe("runAgentLoop", () => {
     expect(updates.some((info) => info.includes("Thought: Inspecting"))).toBe(true);
     expect(updates.some((info) => info.includes("Calling tool: echo") && info.includes('value="hello"'))).toBe(true);
     expect(updates.some((info) => info.includes("Tool succeeded: echo:hello"))).toBe(true);
+  });
+
+  it("retries when the model returns invalid agent JSON", async () => {
+    const registry = new ToolRegistry();
+    const updates: string[] = [];
+    const client = new ErrorThenDoneClient();
+
+    const result = await runAgentLoop({
+      llmClient: client,
+      toolRegistry: registry,
+      maxSteps: 2,
+      systemPrompt: "system",
+      task: "answer",
+      onStep: (_step, info) => updates.push(info)
+    });
+
+    expect(result.stopReason).toBe("done");
+    expect(result.finalResponse).toBe("recovered");
+    expect(updates.some((info) => info.startsWith("Model output invalid:"))).toBe(true);
+    expect(result.messages.some((message) => message.content.includes("Return exactly one valid JSON object"))).toBe(true);
+  });
+
+  it("uses raw invalid model text as a final answer for read-only tasks after tool evidence", async () => {
+    const registry = new ToolRegistry();
+    registry.register(new EchoTool());
+    const updates: string[] = [];
+    const client = new SequenceClient([
+      {
+        text: "checking",
+        done: false,
+        toolCall: { name: "echo", arguments: { value: "tool evidence" } }
+      }
+    ]);
+
+    const result = await runAgentLoop({
+      llmClient: {
+        generate: async (messages, options) => {
+          if (messages.some((message) => message.role === "tool")) {
+            return new RawTextErrorClient().generate(messages, options);
+          }
+          return client.generate(messages, options);
+        }
+      },
+      toolRegistry: registry,
+      maxSteps: 2,
+      systemPrompt: "system",
+      task: "what labels are we using",
+      onStep: (_step, info) => updates.push(info)
+    });
+
+    expect(result.stopReason).toBe("done");
+    expect(result.finalResponse).toContain("label values");
+    expect(updates.some((info) => info.startsWith("Using raw model answer"))).toBe(true);
+  });
+
+  it("does not accept a planning-style raw model answer as a final answer", async () => {
+    const registry = new ToolRegistry();
+    registry.register(new EchoTool());
+    const updates: string[] = [];
+    const toolCallClient = new SequenceClient([
+      {
+        text: "checking",
+        done: false,
+        toolCall: { name: "echo", arguments: { value: "tool evidence" } }
+      }
+    ]);
+    const planClient = new PlanTextErrorClient(
+      "Thinking: I found references to token calculation. Let me search for the actual token counting functions."
+    );
+
+    const result = await runAgentLoop({
+      llmClient: {
+        generate: async (messages, options) => {
+          if (messages.some((message) => message.role === "tool")) {
+            return planClient.generate(messages, options);
+          }
+          return toolCallClient.generate(messages, options);
+        }
+      },
+      toolRegistry: registry,
+      maxSteps: 3,
+      systemPrompt: "system",
+      task: "how does token calculation work",
+      onStep: (_step, info) => updates.push(info)
+    });
+
+    expect(result.stopReason).toBe("max_steps_reached");
+    expect(updates.some((info) => info.startsWith("Using raw model answer"))).toBe(false);
+    expect(
+      updates.some((info) => info.startsWith("Model output invalid (raw looked like a plan"))
+    ).toBe(true);
+  });
+
+  it("does not use raw invalid model text as a final answer for edit tasks", async () => {
+    const registry = new ToolRegistry();
+    registry.register(new EchoTool());
+    const client = new SequenceClient([
+      {
+        text: "checking",
+        done: false,
+        toolCall: { name: "echo", arguments: { value: "tool evidence" } }
+      }
+    ]);
+
+    const result = await runAgentLoop({
+      llmClient: {
+        generate: async (messages, options) => {
+          if (messages.some((message) => message.role === "tool")) {
+            return new RawTextErrorClient().generate(messages, options);
+          }
+          return client.generate(messages, options);
+        }
+      },
+      toolRegistry: registry,
+      maxSteps: 2,
+      systemPrompt: "system",
+      task: "update labels",
+    });
+
+    expect(result.stopReason).toBe("max_steps_reached");
   });
 
   it("does not accept a change-complete final answer before a mutating tool succeeds", async () => {
@@ -260,5 +411,31 @@ describe("runAgentLoop", () => {
     expect(result.stopReason).toBe("done");
     expect(result.messages.some((m) => m.role === "tool" && m.content.includes("Tool throw failed"))).toBe(true);
     expect(result.messages.some((m) => m.role === "tool" && m.content.includes("boom"))).toBe(true);
+  });
+});
+
+describe("looksLikeContinuation", () => {
+  it("detects Thinking:/Thought: prefixes", () => {
+    expect(looksLikeContinuation("Thinking: I found the token calculation implementation.")).toBe(true);
+    expect(looksLikeContinuation("Thought: need to search for definitions.")).toBe(true);
+  });
+
+  it("detects planned next actions", () => {
+    expect(
+      looksLikeContinuation("I found references to token calculation. Let me search for the actual token counting functions.")
+    ).toBe(true);
+    expect(looksLikeContinuation("I'll read the context.ts file to confirm my understanding.")).toBe(true);
+    expect(looksLikeContinuation("I need to check the other tool implementations.")).toBe(true);
+    expect(looksLikeContinuation("Next, I'll verify this by searching the tests.")).toBe(true);
+  });
+
+  it("does not flag concrete answers", () => {
+    expect(
+      looksLikeContinuation("The label values are used only as optional location prefixes.")
+    ).toBe(false);
+    expect(
+      looksLikeContinuation("Token counts come from responseUsage in loop.ts, which falls back to estimateTokens.")
+    ).toBe(false);
+    expect(looksLikeContinuation("")).toBe(false);
   });
 });

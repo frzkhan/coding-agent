@@ -1,5 +1,6 @@
 import { compactMessagesToBudget, countMessageTokens, estimateTokens } from "./context.js";
 import { formatToolObservation } from "./prompts.js";
+import { LlmError } from "../errors.js";
 import type { AgentResult, AgentTokenUsage } from "./state.js";
 import type { ChatMessage, LlmClient, LlmResponse, TokenUsage } from "../llm/client.js";
 import type { ToolRegistry, ToolResult } from "../tools/types.js";
@@ -78,6 +79,28 @@ function isMutatingTool(name: string): boolean {
   return name === "writeFile" || name === "str_replace" || name === "shell";
 }
 
+function invalidModelOutputReminder(error: LlmError): string {
+  return [
+    `The previous model response could not be parsed as the required agent JSON: ${error.message}`,
+    "Return exactly one valid JSON object matching the agent schema.",
+    "If you call a tool, include all required arguments for that specific tool in toolCall.arguments.",
+    'Example search call: {"thought":"searching","done":false,"final":"","toolCall":{"name":"search","arguments":{"pattern":"label","include":"src/**/*.ts"}}}'
+  ].join("\n");
+}
+
+// Heuristic: treat raw model text as "still planning" when it clearly
+// announces another action rather than giving a self-contained answer.
+// These models often emit a thought like `Thinking: ... Let me read X.`
+// when the structured output fails, which is not a final answer.
+export function looksLikeContinuation(text: string): boolean {
+  const normalized = text.replace(/\s+/g, " ").trim();
+  if (!normalized) return false;
+  if (/^(thinking|thought)\s*[:\-]/i.test(normalized)) return true;
+  return /\b(let me|let's|i'?ll|i am going to|i'?m going to|i will|i need to|i should|next,? i|now i'?ll|now i will)\b[^.?!]{0,80}\b(search|look|read|check|verify|confirm|find|inspect|examine|explore|review|investigate|open|list|run|call)\b/i.test(
+    normalized
+  );
+}
+
 export async function runAgentLoop(params: AgentLoopParams): Promise<AgentResult> {
   let messages: ChatMessage[] = params.messages
     ? [...params.messages]
@@ -89,6 +112,7 @@ export async function runAgentLoop(params: AgentLoopParams): Promise<AgentResult
     source: "provider"
   };
   let sawSuccessfulMutation = false;
+  let sawToolResult = false;
 
   if (params.task?.trim()) {
     messages.push({ role: "user", content: params.task });
@@ -109,9 +133,48 @@ export async function runAgentLoop(params: AgentLoopParams): Promise<AgentResult
 
     const promptTokens = countMessageTokens(messages);
     params.onStep?.(step, `Calling model with ~${promptTokens} context tokens`);
-    const response = await params.llmClient.generate(messages, {
-      onChunk: (chunk) => params.onModelChunk?.(step, chunk)
-    });
+    let response: LlmResponse;
+    try {
+      response = await params.llmClient.generate(messages, {
+        onChunk: (chunk) => params.onModelChunk?.(step, chunk)
+      });
+    } catch (error) {
+      if (!(error instanceof LlmError)) {
+        throw error;
+      }
+      const rawFallback = error.rawText?.trim();
+      const canSalvageRaw =
+        !!rawFallback && sawToolResult && !taskRequestsWorkspaceChange(params.task);
+      const rawLooksLikePlan = !!rawFallback && looksLikeContinuation(rawFallback);
+      if (canSalvageRaw && !rawLooksLikePlan) {
+        params.onStep?.(step, "Using raw model answer after invalid structured output");
+        messages.push({
+          role: "assistant",
+          content: rawFallback
+        });
+        tokenUsage = addTokenUsage(tokenUsage, responseUsage({ text: rawFallback, done: true }, promptTokens));
+        return {
+          stopReason: "done",
+          steps: step,
+          finalResponse: rawFallback,
+          messages,
+          tokenUsage
+        };
+      }
+      if (rawLooksLikePlan) {
+        params.onStep?.(
+          step,
+          `Model output invalid (raw looked like a plan, not an answer): ${summarizeText(error.message, 160)}`
+        );
+      } else {
+        params.onStep?.(step, `Model output invalid: ${summarizeText(error.message, 160)}`);
+      }
+      messages.push({
+        role: "user",
+        content: invalidModelOutputReminder(error)
+      });
+      continue;
+    }
     tokenUsage = addTokenUsage(tokenUsage, responseUsage(response, promptTokens));
     messages.push({
       role: "assistant",
@@ -189,6 +252,7 @@ export async function runAgentLoop(params: AgentLoopParams): Promise<AgentResult
       role: "tool",
       content: formatToolObservation(tool.name, result)
     });
+    sawToolResult = true;
     if (result.ok && isMutatingTool(tool.name)) {
       sawSuccessfulMutation = true;
     }

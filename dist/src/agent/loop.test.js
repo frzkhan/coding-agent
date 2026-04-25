@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { runAgentLoop } from "./loop.js";
+import { LlmError } from "../errors.js";
 import { ToolRegistry } from "../tools/types.js";
 class SequenceClient {
     responses;
@@ -7,10 +8,27 @@ class SequenceClient {
     constructor(responses) {
         this.responses = responses;
     }
-    async generate(_messages) {
+    async generate(_messages, _options = {}) {
         const response = this.responses[this.index];
         this.index += 1;
         return response;
+    }
+}
+class ErrorThenDoneClient {
+    calls = 0;
+    async generate() {
+        this.calls += 1;
+        if (this.calls === 1) {
+            throw new LlmError("Ollama request failed: No object generated: could not parse the response.");
+        }
+        return { text: "recovered", done: true };
+    }
+}
+class RawTextErrorClient {
+    async generate(_messages, _options = {}) {
+        throw new LlmError("Ollama request failed: No object generated: could not parse the response.", {
+            rawText: "The label values are used only as optional location prefixes."
+        });
     }
 }
 class EchoTool {
@@ -91,6 +109,79 @@ describe("runAgentLoop", () => {
         expect(updates.some((info) => info.includes("Thought: Inspecting"))).toBe(true);
         expect(updates.some((info) => info.includes("Calling tool: echo") && info.includes('value="hello"'))).toBe(true);
         expect(updates.some((info) => info.includes("Tool succeeded: echo:hello"))).toBe(true);
+    });
+    it("retries when the model returns invalid agent JSON", async () => {
+        const registry = new ToolRegistry();
+        const updates = [];
+        const client = new ErrorThenDoneClient();
+        const result = await runAgentLoop({
+            llmClient: client,
+            toolRegistry: registry,
+            maxSteps: 2,
+            systemPrompt: "system",
+            task: "answer",
+            onStep: (_step, info) => updates.push(info)
+        });
+        expect(result.stopReason).toBe("done");
+        expect(result.finalResponse).toBe("recovered");
+        expect(updates.some((info) => info.startsWith("Model output invalid:"))).toBe(true);
+        expect(result.messages.some((message) => message.content.includes("Return exactly one valid JSON object"))).toBe(true);
+    });
+    it("uses raw invalid model text as a final answer for read-only tasks after tool evidence", async () => {
+        const registry = new ToolRegistry();
+        registry.register(new EchoTool());
+        const updates = [];
+        const client = new SequenceClient([
+            {
+                text: "checking",
+                done: false,
+                toolCall: { name: "echo", arguments: { value: "tool evidence" } }
+            }
+        ]);
+        const result = await runAgentLoop({
+            llmClient: {
+                generate: async (messages, options) => {
+                    if (messages.some((message) => message.role === "tool")) {
+                        return new RawTextErrorClient().generate(messages, options);
+                    }
+                    return client.generate(messages, options);
+                }
+            },
+            toolRegistry: registry,
+            maxSteps: 2,
+            systemPrompt: "system",
+            task: "what labels are we using",
+            onStep: (_step, info) => updates.push(info)
+        });
+        expect(result.stopReason).toBe("done");
+        expect(result.finalResponse).toContain("label values");
+        expect(updates.some((info) => info.startsWith("Using raw model answer"))).toBe(true);
+    });
+    it("does not use raw invalid model text as a final answer for edit tasks", async () => {
+        const registry = new ToolRegistry();
+        registry.register(new EchoTool());
+        const client = new SequenceClient([
+            {
+                text: "checking",
+                done: false,
+                toolCall: { name: "echo", arguments: { value: "tool evidence" } }
+            }
+        ]);
+        const result = await runAgentLoop({
+            llmClient: {
+                generate: async (messages, options) => {
+                    if (messages.some((message) => message.role === "tool")) {
+                        return new RawTextErrorClient().generate(messages, options);
+                    }
+                    return client.generate(messages, options);
+                }
+            },
+            toolRegistry: registry,
+            maxSteps: 2,
+            systemPrompt: "system",
+            task: "update labels",
+        });
+        expect(result.stopReason).toBe("max_steps_reached");
     });
     it("does not accept a change-complete final answer before a mutating tool succeeds", async () => {
         const registry = new ToolRegistry();

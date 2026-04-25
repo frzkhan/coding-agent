@@ -96,12 +96,25 @@ function shouldPersistStepInfo(info: string): boolean {
     info.startsWith("Tool failed:") ||
     info.startsWith("Tool unavailable:") ||
     info.startsWith("Rejected final answer:") ||
+    info.startsWith("Model output invalid:") ||
+    info.startsWith("Using raw model answer") ||
     info.startsWith("Model produced final answer") ||
     info.startsWith("Compacted context")
   );
 }
 
-export function parseSessionCommand(input: string): SessionCommand | null {
+export const SLASH_COMMANDS = [
+  { command: "/exit", description: "End session" },
+  { command: "/quit", description: "End session" },
+  { command: "/help", description: "Show commands" },
+  { command: "/reset", description: "Clear conversation history" },
+  { command: "/tools", description: "List enabled tools" },
+  { command: "/config", description: "Show current session config" },
+  { command: "/max N", description: "Set max steps per turn" },
+  { command: "/dryrun on|off", description: "Toggle write/shell tools" }
+];
+
+function parseSessionCommand(input: string): SessionCommand | null {
   const text = input.trim();
   if (!text.startsWith("/")) return null;
 
@@ -118,6 +131,14 @@ export function parseSessionCommand(input: string): SessionCommand | null {
   if (dryRunMatch) return { type: "dryrun", value: dryRunMatch[1] === "on" };
 
   return null;
+}
+
+function getSlashCommandSuggestions(input: string): string[] {
+  const text = input.trim();
+  if (!text.startsWith("/")) return [];
+
+  const partial = text.slice(1).toLowerCase();
+  return SLASH_COMMANDS.filter(cmd => cmd.command.toLowerCase().includes(partial)).map(cmd => cmd.command);
 }
 
 function createRuntime(options: RuntimeOptions) {

@@ -1,3 +1,4 @@
+import { countTokens as gptCountTokens } from "gpt-tokenizer";
 import type { ChatMessage } from "../llm/client.js";
 
 const SUMMARY_MAX_CHARS = 240;
@@ -9,9 +10,17 @@ export type ContextBudgetResult = {
   compacted: boolean;
 };
 
+// Tokenizer is a close approximation for OpenAI/GPT models (cl100k_base by default
+// in gpt-tokenizer@3). For other model families (qwen, llama, etc.) the count
+// may differ but is still far more accurate than a flat char/4 heuristic and
+// is only used as a fallback when the provider does not report real usage.
 export function estimateTokens(text: string): number {
   if (!text) return 0;
-  return Math.ceil(text.length / 4);
+  try {
+    return gptCountTokens(text);
+  } catch {
+    return Math.ceil(text.length / 4);
+  }
 }
 
 export function countMessageTokens(messages: ChatMessage[]): number {

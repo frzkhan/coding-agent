@@ -1,5 +1,6 @@
 import { compactMessagesToBudget, countMessageTokens, estimateTokens } from "./context.js";
 import { formatToolObservation } from "./prompts.js";
+import { LlmError } from "../errors.js";
 function addTokenUsage(total, usage) {
     const inputTokens = usage.inputTokens ?? 0;
     const outputTokens = usage.outputTokens ?? 0;
@@ -52,6 +53,14 @@ function finalClaimsWorkspaceChange(final) {
 function isMutatingTool(name) {
     return name === "writeFile" || name === "str_replace" || name === "shell";
 }
+function invalidModelOutputReminder(error) {
+    return [
+        `The previous model response could not be parsed as the required agent JSON: ${error.message}`,
+        "Return exactly one valid JSON object matching the agent schema.",
+        "If you call a tool, include all required arguments for that specific tool in toolCall.arguments.",
+        'Example search call: {"thought":"searching","done":false,"final":"","toolCall":{"name":"search","arguments":{"pattern":"label","include":"src/**/*.ts"}}}'
+    ].join("\n");
+}
 export async function runAgentLoop(params) {
     let messages = params.messages
         ? [...params.messages]
@@ -63,6 +72,7 @@ export async function runAgentLoop(params) {
         source: "provider"
     };
     let sawSuccessfulMutation = false;
+    let sawToolResult = false;
     if (params.task?.trim()) {
         messages.push({ role: "user", content: params.task });
     }
@@ -79,9 +89,39 @@ export async function runAgentLoop(params) {
         }
         const promptTokens = countMessageTokens(messages);
         params.onStep?.(step, `Calling model with ~${promptTokens} context tokens`);
-        const response = await params.llmClient.generate(messages, {
-            onChunk: (chunk) => params.onModelChunk?.(step, chunk)
-        });
+        let response;
+        try {
+            response = await params.llmClient.generate(messages, {
+                onChunk: (chunk) => params.onModelChunk?.(step, chunk)
+            });
+        }
+        catch (error) {
+            if (!(error instanceof LlmError)) {
+                throw error;
+            }
+            const rawFallback = error.rawText?.trim();
+            if (rawFallback && sawToolResult && !taskRequestsWorkspaceChange(params.task)) {
+                params.onStep?.(step, "Using raw model answer after invalid structured output");
+                messages.push({
+                    role: "assistant",
+                    content: rawFallback
+                });
+                tokenUsage = addTokenUsage(tokenUsage, responseUsage({ text: rawFallback, done: true }, promptTokens));
+                return {
+                    stopReason: "done",
+                    steps: step,
+                    finalResponse: rawFallback,
+                    messages,
+                    tokenUsage
+                };
+            }
+            params.onStep?.(step, `Model output invalid: ${summarizeText(error.message, 160)}`);
+            messages.push({
+                role: "user",
+                content: invalidModelOutputReminder(error)
+            });
+            continue;
+        }
         tokenUsage = addTokenUsage(tokenUsage, responseUsage(response, promptTokens));
         messages.push({
             role: "assistant",
@@ -152,6 +192,7 @@ export async function runAgentLoop(params) {
             role: "tool",
             content: formatToolObservation(tool.name, result)
         });
+        sawToolResult = true;
         if (result.ok && isMutatingTool(tool.name)) {
             sawSuccessfulMutation = true;
         }

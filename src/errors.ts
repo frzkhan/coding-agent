@@ -13,8 +13,11 @@ export class ToolExecutionError extends Error {
 }
 
 export class LlmError extends Error {
-  constructor(message: string) {
+  readonly rawText?: string;
+
+  constructor(message: string, options: { rawText?: string } = {}) {
     super(message);
     this.name = "LlmError";
+    this.rawText = options.rawText;
   }
 }

@@ -1,16 +1,71 @@
 import { z } from "zod";
 import { LlmError } from "../errors.js";
 
-const agentOutputSchema = z.object({
+const toolCallSchema = z.discriminatedUnion("name", [
+  z.object({
+    name: z.literal("readFile"),
+    arguments: z.object({ path: z.string().min(1) })
+  }),
+  z.object({
+    name: z.literal("glob"),
+    arguments: z.object({ pattern: z.string().min(1) })
+  }),
+  z.object({
+    name: z.literal("search"),
+    arguments: z.object({
+      pattern: z.string().min(1),
+      include: z.string().optional(),
+      context: z.number().int().optional(),
+      maxResults: z.number().int().optional(),
+      caseInsensitive: z.boolean().optional()
+    })
+  }),
+  z.object({
+    name: z.literal("tsWorkspaceSymbols"),
+    arguments: z.object({ query: z.string().min(1) })
+  }),
+  z.object({
+    name: z.literal("tsDefinition"),
+    arguments: z.object({
+      path: z.string().min(1),
+      line: z.number().int().min(1),
+      character: z.number().int().min(0)
+    })
+  }),
+  z.object({
+    name: z.literal("tsReferences"),
+    arguments: z.object({
+      path: z.string().min(1),
+      line: z.number().int().min(1),
+      character: z.number().int().min(0)
+    })
+  }),
+  z.object({
+    name: z.literal("writeFile"),
+    arguments: z.object({
+      path: z.string().min(1),
+      content: z.string()
+    })
+  }),
+  z.object({
+    name: z.literal("str_replace"),
+    arguments: z.object({
+      path: z.string().min(1),
+      old_string: z.string().min(1),
+      new_string: z.string()
+    })
+  }),
+  z.object({
+    name: z.literal("shell"),
+    arguments: z.object({ command: z.string().min(1) })
+  })
+]);
+
+export const agentOutputSchema = z.object({
   thought: z.coerce.string().default(""),
   done: z.boolean(),
   final: z.coerce.string().default(""),
-  toolCall: z
-    .object({
-      name: z.string(),
-      arguments: z.record(z.string(), z.unknown()).default({})
-    })
-    .optional()
+  toolCall: toolCallSchema.optional()
 });
 
 export type AgentOutput = z.infer<typeof agentOutputSchema>;
@@ -94,21 +149,29 @@ function normalizeParsedAgentJson(raw: unknown): unknown {
 
   if (o.toolCall !== undefined && o.toolCall !== null && typeof o.toolCall === "object") {
     const tc = { ...(o.toolCall as Record<string, unknown>) };
-    const args = tc.arguments;
-    if (typeof args === "string") {
-      try {
-        tc.arguments = JSON.parse(args) as unknown;
-      } catch {
+    const hasValidName = typeof tc.name === "string" && tc.name.trim().length > 0;
+    if (!hasValidName) {
+      // Common model mistake: emit `toolCall: {}` (or a toolCall without a
+      // name) alongside a real `final` / `done: true`. Treat that as "no
+      // tool call" so the response still parses.
+      delete o.toolCall;
+    } else {
+      const args = tc.arguments;
+      if (typeof args === "string") {
+        try {
+          tc.arguments = JSON.parse(args) as unknown;
+        } catch {
+          tc.arguments = {};
+        }
+      } else if (args === undefined || args === null) {
+        tc.arguments = {};
+      } else if (Array.isArray(args)) {
+        tc.arguments = {};
+      } else if (typeof args !== "object") {
         tc.arguments = {};
       }
-    } else if (args === undefined || args === null) {
-      tc.arguments = {};
-    } else if (Array.isArray(args)) {
-      tc.arguments = {};
-    } else if (typeof args !== "object") {
-      tc.arguments = {};
+      o.toolCall = tc;
     }
-    o.toolCall = tc;
   }
 
   if (o.done === undefined) {

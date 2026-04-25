@@ -7,6 +7,9 @@ describe("parseAgentOutput", () => {
         expect(output.done).toBe(false);
         expect(output.toolCall?.name).toBe("glob");
     });
+    it("rejects tool calls that omit required arguments", () => {
+        expect(() => parseAgentOutput('{"thought":"searching","done":false,"final":"","toolCall":{"name":"search","arguments":{}}}')).toThrow(LlmError);
+    });
     it("parses JSON wrapped in markdown fences", () => {
         const output = parseAgentOutput('```json\n{"thought":"done","done":true,"final":"finished"}\n```');
         expect(output.done).toBe(true);
@@ -16,7 +19,7 @@ describe("parseAgentOutput", () => {
         expect(() => parseAgentOutput("I think we should continue")).toThrow(LlmError);
     });
     it("parses JSON when a string value contains a closing brace", () => {
-        const output = parseAgentOutput('{"thought":"brace } here","done":true,"final":"ok with } char","toolCall":{"name":"x","arguments":{}}}');
+        const output = parseAgentOutput('{"thought":"brace } here","done":true,"final":"ok with } char"}');
         expect(output.done).toBe(true);
         expect(output.final).toBe("ok with } char");
     });
