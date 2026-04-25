@@ -10,6 +10,8 @@ function formatToolError(error: unknown): string {
 
 export class ReadFileTool implements Tool {
   readonly name = "readFile";
+  readonly parameters = '{ "path": "relative/file.txt" }';
+  readonly description = "Read a text file from the workspace.";
 
   constructor(private readonly workspaceRoot: string) {}
 
@@ -27,6 +29,8 @@ export class ReadFileTool implements Tool {
 
 export class WriteFileTool implements Tool {
   readonly name = "writeFile";
+  readonly parameters = '{ "path": "relative/file.txt", "content": "full file contents" }';
+  readonly description = "Create or overwrite a workspace file.";
 
   constructor(private readonly workspaceRoot: string) {}
 
@@ -49,6 +53,8 @@ export class WriteFileTool implements Tool {
 
 export class StrReplaceTool implements Tool {
   readonly name = "str_replace";
+  readonly parameters = '{ "path": "relative/file.txt", "old_string": "exact unique text", "new_string": "replacement text" }';
+  readonly description = "Replace exactly one occurrence in an existing file. Use readFile first if you need exact text.";
 
   constructor(private readonly workspaceRoot: string) {}
 
@@ -58,10 +64,10 @@ export class StrReplaceTool implements Tool {
       const oldString = String(args.old_string ?? args.oldString ?? "");
       const newString = String(args.new_string ?? args.newString ?? "");
       if (!targetPath) {
-        return { ok: false, output: "Missing path." };
+        return { ok: false, output: `Missing path. Required args: ${this.parameters}` };
       }
       if (!oldString) {
-        return { ok: false, output: "Missing old_string." };
+        return { ok: false, output: `Missing old_string. Required args: ${this.parameters}` };
       }
 
       const { absolute } = assertReadablePath(this.workspaceRoot, targetPath);
@@ -84,6 +90,8 @@ export class StrReplaceTool implements Tool {
 
 export class GlobTool implements Tool {
   readonly name = "glob";
+  readonly parameters = '{ "pattern": "src/**/*.ts" }';
+  readonly description = "List workspace files matching a glob pattern.";
 
   constructor(private readonly workspaceRoot: string) {}
 

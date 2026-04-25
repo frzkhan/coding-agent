@@ -29,13 +29,15 @@ function formatMatch(relativePath: string, lines: string[], lineIndex: number, c
 
 export class SearchTool implements Tool {
   readonly name = "search";
+  readonly parameters = '{ "pattern": "regex text", "include": "src/**/*.ts", "context": 1, "maxResults": 50 }';
+  readonly description = "Search text with a regular expression. Use pattern, not query; include/context/maxResults are optional.";
 
   constructor(private readonly workspaceRoot: string) {}
 
   async run(args: Record<string, unknown>): Promise<ToolResult> {
-    const pattern = String(args.pattern ?? "").trim();
+    const pattern = String(args.pattern ?? args.query ?? "").trim();
     if (!pattern) {
-      return { ok: false, output: "Missing pattern." };
+      return { ok: false, output: `Missing pattern. Required args: ${this.parameters}` };
     }
 
     let regex: RegExp;

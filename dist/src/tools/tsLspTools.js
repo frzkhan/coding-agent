@@ -12,6 +12,8 @@ function parseLineChar(args) {
 export class TsWorkspaceSymbolsTool {
     session;
     name = "tsWorkspaceSymbols";
+    parameters = '{ "query": "symbol name substring" }';
+    description = "Search TypeScript/JavaScript symbols across the workspace.";
     constructor(session) {
         this.session = session;
     }
@@ -34,6 +36,8 @@ export class TsWorkspaceSymbolsTool {
 export class TsDefinitionTool {
     session;
     name = "tsDefinition";
+    parameters = '{ "path": "src/file.ts", "line": 1, "character": 0 }';
+    description = "Find the definition at a TypeScript/JavaScript source position.";
     constructor(session) {
         this.session = session;
     }
@@ -60,6 +64,8 @@ export class TsDefinitionTool {
 export class TsReferencesTool {
     session;
     name = "tsReferences";
+    parameters = '{ "path": "src/file.ts", "line": 1, "character": 0 }';
+    description = "Find references at a TypeScript/JavaScript source position.";
     constructor(session) {
         this.session = session;
     }

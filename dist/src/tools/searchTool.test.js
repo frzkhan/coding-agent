@@ -26,6 +26,14 @@ describe("SearchTool", () => {
             expect(result.output).toContain("sample.ts:3: three");
         });
     });
+    it("accepts query as a compatibility alias for pattern", async () => {
+        await withTempWorkspace(async (workspace) => {
+            await writeFile(path.join(workspace, "sample.ts"), "target()\n", "utf8");
+            const result = await new SearchTool(workspace).run({ query: "target" });
+            expect(result.ok).toBe(true);
+            expect(result.output).toContain("sample.ts:1: target()");
+        });
+    });
     it("does not search ignored directories or .env", async () => {
         await withTempWorkspace(async (workspace) => {
             await mkdir(path.join(workspace, "node_modules"));

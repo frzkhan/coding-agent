@@ -62,6 +62,22 @@ function summarizeToolResult(result: ToolResult): string {
   return `Tool ${status}: ${summarizeText(result.output, 140)}`;
 }
 
+function taskRequestsWorkspaceChange(task: string | undefined): boolean {
+  return /\b(add|change|create|delete|edit|fix|implement|modify|refactor|remove|rename|replace|update|write)\b/i.test(
+    task ?? ""
+  );
+}
+
+function finalClaimsWorkspaceChange(final: string): boolean {
+  return /\b(applied|changed|completed|created|deleted|edited|fixed|implemented|modified|removed|renamed|replaced|updated|wrote)\b/i.test(
+    final
+  );
+}
+
+function isMutatingTool(name: string): boolean {
+  return name === "writeFile" || name === "str_replace" || name === "shell";
+}
+
 export async function runAgentLoop(params: AgentLoopParams): Promise<AgentResult> {
   let messages: ChatMessage[] = params.messages
     ? [...params.messages]
@@ -72,6 +88,7 @@ export async function runAgentLoop(params: AgentLoopParams): Promise<AgentResult
     totalTokens: 0,
     source: "provider"
   };
+  let sawSuccessfulMutation = false;
 
   if (params.task?.trim()) {
     messages.push({ role: "user", content: params.task });
@@ -100,9 +117,23 @@ export async function runAgentLoop(params: AgentLoopParams): Promise<AgentResult
       role: "assistant",
       content: response.done ? response.text : `Thinking: ${response.text}`
     });
-    params.onStep?.(step, response.done ? "Model produced final answer" : `Model intent: ${summarizeText(response.text)}`);
 
     if (response.done) {
+      if (
+        taskRequestsWorkspaceChange(params.task) &&
+        finalClaimsWorkspaceChange(response.text) &&
+        !sawSuccessfulMutation
+      ) {
+        const warning =
+          "Rejected final answer: it claimed workspace changes were complete, but no writeFile, str_replace, or shell tool succeeded this turn.";
+        params.onStep?.(step, warning);
+        messages.push({
+          role: "user",
+          content: `${warning} If code changes are needed, call the appropriate mutating tool with all required arguments. If no change is needed, explain that explicitly.`
+        });
+        continue;
+      }
+      params.onStep?.(step, "Model produced final answer");
       return {
         stopReason: "done",
         steps: step,
@@ -111,6 +142,8 @@ export async function runAgentLoop(params: AgentLoopParams): Promise<AgentResult
         tokenUsage
       };
     }
+
+    params.onStep?.(step, `Thought: ${summarizeText(response.text)}`);
 
     if (!response.toolCall) {
       return {
@@ -156,6 +189,9 @@ export async function runAgentLoop(params: AgentLoopParams): Promise<AgentResult
       role: "tool",
       content: formatToolObservation(tool.name, result)
     });
+    if (result.ok && isMutatingTool(tool.name)) {
+      sawSuccessfulMutation = true;
+    }
     params.onStep?.(step, summarizeToolResult(result));
   }
 

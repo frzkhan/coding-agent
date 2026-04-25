@@ -25,13 +25,15 @@ function formatMatch(relativePath, lines, lineIndex, context) {
 export class SearchTool {
     workspaceRoot;
     name = "search";
+    parameters = '{ "pattern": "regex text", "include": "src/**/*.ts", "context": 1, "maxResults": 50 }';
+    description = "Search text with a regular expression. Use pattern, not query; include/context/maxResults are optional.";
     constructor(workspaceRoot) {
         this.workspaceRoot = workspaceRoot;
     }
     async run(args) {
-        const pattern = String(args.pattern ?? "").trim();
+        const pattern = String(args.pattern ?? args.query ?? "").trim();
         if (!pattern) {
-            return { ok: false, output: "Missing pattern." };
+            return { ok: false, output: `Missing pattern. Required args: ${this.parameters}` };
         }
         let regex;
         try {

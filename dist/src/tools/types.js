@@ -9,4 +9,16 @@ export class ToolRegistry {
     listNames() {
         return Array.from(this.tools.keys());
     }
+    describeTools() {
+        return Array.from(this.tools.values())
+            .map((tool) => {
+            const parts = [tool.name];
+            if (tool.parameters)
+                parts.push(`args: ${tool.parameters}`);
+            if (tool.description)
+                parts.push(tool.description);
+            return `- ${parts.join(" - ")}`;
+        })
+            .join("\n");
+    }
 }

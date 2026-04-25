@@ -8,6 +8,8 @@ function formatToolError(error) {
 export class ReadFileTool {
     workspaceRoot;
     name = "readFile";
+    parameters = '{ "path": "relative/file.txt" }';
+    description = "Read a text file from the workspace.";
     constructor(workspaceRoot) {
         this.workspaceRoot = workspaceRoot;
     }
@@ -26,6 +28,8 @@ export class ReadFileTool {
 export class WriteFileTool {
     workspaceRoot;
     name = "writeFile";
+    parameters = '{ "path": "relative/file.txt", "content": "full file contents" }';
+    description = "Create or overwrite a workspace file.";
     constructor(workspaceRoot) {
         this.workspaceRoot = workspaceRoot;
     }
@@ -49,6 +53,8 @@ export class WriteFileTool {
 export class StrReplaceTool {
     workspaceRoot;
     name = "str_replace";
+    parameters = '{ "path": "relative/file.txt", "old_string": "exact unique text", "new_string": "replacement text" }';
+    description = "Replace exactly one occurrence in an existing file. Use readFile first if you need exact text.";
     constructor(workspaceRoot) {
         this.workspaceRoot = workspaceRoot;
     }
@@ -58,10 +64,10 @@ export class StrReplaceTool {
             const oldString = String(args.old_string ?? args.oldString ?? "");
             const newString = String(args.new_string ?? args.newString ?? "");
             if (!targetPath) {
-                return { ok: false, output: "Missing path." };
+                return { ok: false, output: `Missing path. Required args: ${this.parameters}` };
             }
             if (!oldString) {
-                return { ok: false, output: "Missing old_string." };
+                return { ok: false, output: `Missing old_string. Required args: ${this.parameters}` };
             }
             const { absolute } = assertReadablePath(this.workspaceRoot, targetPath);
             const content = await fs.readFile(absolute, "utf8");
@@ -83,6 +89,8 @@ export class StrReplaceTool {
 export class GlobTool {
     workspaceRoot;
     name = "glob";
+    parameters = '{ "pattern": "src/**/*.ts" }';
+    description = "List workspace files matching a glob pattern.";
     constructor(workspaceRoot) {
         this.workspaceRoot = workspaceRoot;
     }

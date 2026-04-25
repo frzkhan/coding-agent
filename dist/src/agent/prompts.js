@@ -10,6 +10,8 @@ export function buildSystemPrompt(toolRegistry, workspaceRoot, fileTree) {
         "Use search for regex/text search across the codebase; it returns path, line number, and context.",
         "Use glob to discover files by path pattern.",
         "Use available tools when needed, then decide if the task is done.",
+        "When calling a tool, use exactly the argument names shown in the tool list. Include all required arguments in the same toolCall.",
+        "For code change requests, do not say the work is complete until you have observed a successful writeFile, str_replace, or shell tool result.",
         "Always return strict JSON with this shape.",
         "Do not wrap JSON in markdown code fences. Do not add extra explanatory text.",
         "Return exactly one JSON object.",
@@ -23,7 +25,8 @@ export function buildSystemPrompt(toolRegistry, workspaceRoot, fileTree) {
             }
         }, null, 2),
         "If done is true, provide final and omit toolCall.",
-        `Available tools: ${toolRegistry.listNames().join(", ")}`
+        "Available tools:",
+        toolRegistry.describeTools()
     ].join("\n");
 }
 export function formatToolObservation(name, result) {

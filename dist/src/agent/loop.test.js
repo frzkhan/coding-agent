@@ -25,6 +25,12 @@ class ThrowTool {
         throw new Error("boom");
     }
 }
+class MutatingTool {
+    name = "str_replace";
+    async run() {
+        return { ok: true, output: "Replaced text in src/file.ts" };
+    }
+}
 describe("runAgentLoop", () => {
     it("finishes when model returns done", async () => {
         const registry = new ToolRegistry();
@@ -62,7 +68,7 @@ describe("runAgentLoop", () => {
         expect(result.stopReason).toBe("done");
         expect(result.steps).toBe(2);
     });
-    it("reports model intent, tool call details, and tool result in step updates", async () => {
+    it("reports model thoughts, tool call details, and tool result in step updates", async () => {
         const registry = new ToolRegistry();
         registry.register(new EchoTool());
         const updates = [];
@@ -82,9 +88,48 @@ describe("runAgentLoop", () => {
             task: "task",
             onStep: (_step, info) => updates.push(info)
         });
-        expect(updates.some((info) => info.includes("Model intent: Inspecting"))).toBe(true);
+        expect(updates.some((info) => info.includes("Thought: Inspecting"))).toBe(true);
         expect(updates.some((info) => info.includes("Calling tool: echo") && info.includes('value="hello"'))).toBe(true);
         expect(updates.some((info) => info.includes("Tool succeeded: echo:hello"))).toBe(true);
+    });
+    it("does not accept a change-complete final answer before a mutating tool succeeds", async () => {
+        const registry = new ToolRegistry();
+        const updates = [];
+        const client = new SequenceClient([
+            { text: "CLI updated.", done: true }
+        ]);
+        const result = await runAgentLoop({
+            llmClient: client,
+            toolRegistry: registry,
+            maxSteps: 1,
+            systemPrompt: "system",
+            task: "Update the CLI output",
+            onStep: (_step, info) => updates.push(info)
+        });
+        expect(result.stopReason).toBe("max_steps_reached");
+        expect(updates.some((info) => info.startsWith("Rejected final answer:"))).toBe(true);
+        expect(updates.some((info) => info === "Model produced final answer")).toBe(false);
+    });
+    it("accepts a change-complete final answer after a mutating tool succeeds", async () => {
+        const registry = new ToolRegistry();
+        registry.register(new MutatingTool());
+        const client = new SequenceClient([
+            {
+                text: "need edit",
+                done: false,
+                toolCall: { name: "str_replace", arguments: { path: "src/file.ts", old_string: "a", new_string: "b" } }
+            },
+            { text: "CLI updated.", done: true }
+        ]);
+        const result = await runAgentLoop({
+            llmClient: client,
+            toolRegistry: registry,
+            maxSteps: 2,
+            systemPrompt: "system",
+            task: "Update the CLI output"
+        });
+        expect(result.stopReason).toBe("done");
+        expect(result.finalResponse).toBe("CLI updated.");
     });
     it("aggregates token usage across model calls", async () => {
         const registry = new ToolRegistry();

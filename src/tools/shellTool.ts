@@ -15,6 +15,8 @@ function outputPart(value: string | Buffer | undefined): string {
 
 export class ShellTool implements Tool {
   readonly name = "shell";
+  readonly parameters = '{ "command": "allowed shell command" }';
+  readonly description = "Run an allowlisted shell command in the workspace.";
 
   constructor(
     private readonly workspaceRoot: string,
@@ -33,7 +35,7 @@ export class ShellTool implements Tool {
   async run(args: Record<string, unknown>): Promise<ToolResult> {
     const command = String(args.command ?? "").trim();
     if (!command) {
-      return { ok: false, output: "Missing command." };
+      return { ok: false, output: `Missing command. Required args: ${this.parameters}` };
     }
     if (!this.isAllowed(command)) {
       return { ok: false, output: `Blocked command by allowlist: ${command}` };

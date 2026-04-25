@@ -9,6 +9,8 @@ export class ShellTool {
     allowlist;
     timeoutMs;
     name = "shell";
+    parameters = '{ "command": "allowed shell command" }';
+    description = "Run an allowlisted shell command in the workspace.";
     constructor(workspaceRoot, allowlist, timeoutMs) {
         this.workspaceRoot = workspaceRoot;
         this.allowlist = allowlist;
@@ -23,7 +25,7 @@ export class ShellTool {
     async run(args) {
         const command = String(args.command ?? "").trim();
         if (!command) {
-            return { ok: false, output: "Missing command." };
+            return { ok: false, output: `Missing command. Required args: ${this.parameters}` };
         }
         if (!this.isAllowed(command)) {
             return { ok: false, output: `Blocked command by allowlist: ${command}` };

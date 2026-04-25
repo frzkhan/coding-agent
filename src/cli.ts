@@ -1,7 +1,6 @@
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import chalk from "chalk";
-import cliProgress from "cli-progress";
 import { Command } from "commander";
 import ora from "ora";
 import { buildFileTree } from "./agent/fileTree.js";
@@ -53,13 +52,50 @@ function truncateStatus(value: string, maxLength = 80): string {
   return value.length <= maxLength ? value : `${value.slice(0, maxLength - 3)}...`;
 }
 
+function terminalColumns(): number {
+  return Math.max(40, process.stdout.columns || 100);
+}
+
+function spinnerStatus(value: string): string {
+  return truncateStatus(value, Math.max(30, terminalColumns() - 25));
+}
+
+function wrapLogLine(value: string, width = terminalColumns()): string {
+  const words = value.replace(/\s+/g, " ").trim().split(" ");
+  const lines: string[] = [];
+  let current = "";
+
+  for (const word of words) {
+    if (!current) {
+      current = word;
+      continue;
+    }
+    if (`${current} ${word}`.length > width) {
+      lines.push(current);
+      current = word;
+      continue;
+    }
+    current = `${current} ${word}`;
+  }
+
+  if (current) lines.push(current);
+  return lines.join("\n");
+}
+
+function formatPersistedStep(step: number, maxSteps: number, info: string): string {
+  const prefix = `Step ${step}/${maxSteps}: `;
+  const indent = " ".repeat(prefix.length);
+  return wrapLogLine(`${prefix}${info}`).split("\n").map((line, index) => (index === 0 ? line : `${indent}${line}`)).join("\n");
+}
+
 function shouldPersistStepInfo(info: string): boolean {
   return (
-    info.startsWith("Model intent:") ||
+    info.startsWith("Thought:") ||
     info.startsWith("Calling tool:") ||
     info.startsWith("Tool succeeded:") ||
     info.startsWith("Tool failed:") ||
     info.startsWith("Tool unavailable:") ||
+    info.startsWith("Rejected final answer:") ||
     info.startsWith("Model produced final answer") ||
     info.startsWith("Compacted context")
   );
@@ -125,18 +161,7 @@ async function runSingleTurn(
   onStepOverride?: (step: number, info: string) => void
 ): Promise<AgentResult> {
   const spinner = useInteractiveUi ? ora({ text: "Starting agent..." }).start() : null;
-  const progress =
-    useInteractiveUi && process.stdout.isTTY
-      ? new cliProgress.SingleBar(
-          {
-            format: "Progress |{bar}| {value}/{total} steps | {status}",
-            hideCursor: true
-          },
-          cliProgress.Presets.shades_classic
-        )
-      : null;
 
-  progress?.start(session.maxSteps, 0, { status: "booting" });
   const streamedCharsByStep = new Map<number, number>();
   const result = await runAgentLoop({
     llmClient: session.llmClient,
@@ -159,21 +184,17 @@ async function runSingleTurn(
 
       if (info.startsWith("Calling model")) {
         spinner?.start();
-        spinner!.text = `Step ${step}/${session.maxSteps}: thinking (${info.replace("Calling model with ", "")})`;
-        progress?.update(step, { status: truncateStatus(info) });
+        spinner!.text = spinnerStatus(`Step ${step}/${session.maxSteps}: thinking (${info.replace("Calling model with ", "")})`);
         return;
       }
 
       if (shouldPersistStepInfo(info)) {
-        spinner?.stopAndPersist({
-          symbol: chalk.dim("•"),
-          text: `Step ${step}/${session.maxSteps}: ${truncateStatus(info, 180)}`
-        });
+        spinner?.stop();
+        console.log(`${chalk.dim("•")} ${formatPersistedStep(step, session.maxSteps, info)}`);
       }
 
       spinner?.start();
-      spinner!.text = `Step ${step}/${session.maxSteps}: ${info}`;
-      progress?.update(step, { status: truncateStatus(info) });
+      spinner!.text = spinnerStatus(`Step ${step}/${session.maxSteps}: ${info}`);
     },
     onModelChunk: (step, chunk) => {
       const nextChars = (streamedCharsByStep.get(step) ?? 0) + chunk.length;
@@ -186,12 +207,10 @@ async function runSingleTurn(
       }
 
       spinner?.start();
-      spinner!.text = `Step ${step}/${session.maxSteps}: receiving model stream (${nextChars} chars)`;
-      progress?.update(step, { status: `streaming model (${nextChars} chars)` });
+      spinner!.text = spinnerStatus(`Step ${step}/${session.maxSteps}: receiving model stream (${nextChars} chars)`);
     }
   });
 
-  progress?.stop();
   if (result.stopReason === "done") {
     spinner?.succeed(chalk.green(`Completed in ${result.steps} step(s) | ${formatTokenUsage(result.tokenUsage)}`));
   } else {
