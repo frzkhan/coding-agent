@@ -69,6 +69,56 @@ function resolveInWorkspaceRoot(workspaceRoot, targetPath) {
     }
     return resolved;
 }
+function severityLabel(severity) {
+    switch (severity) {
+        case 1:
+            return "error";
+        case 2:
+            return "warning";
+        case 3:
+            return "info";
+        case 4:
+            return "hint";
+        default:
+            return "info";
+    }
+}
+export function formatDiagnostics(relativePath, diagnostics) {
+    if (!diagnostics.length)
+        return "No TypeScript errors or warnings.";
+    return diagnostics
+        .map((d) => {
+        const start = d.range.start;
+        const line = start.line + 1;
+        const char = start.character;
+        const code = d.code !== undefined && d.code !== "" ? ` ${d.code}` : "";
+        return `${relativePath}:${line}:${char} ${severityLabel(d.severity)}${code}: ${d.message}`;
+    })
+        .join("\n");
+}
+export function formatHoverContents(raw) {
+    if (!raw || typeof raw !== "object")
+        return "No hover information at that position.";
+    const o = raw;
+    const contents = o.contents;
+    if (contents == null)
+        return "No hover information at that position.";
+    const flatten = (item) => {
+        if (typeof item === "string")
+            return item;
+        if (item && typeof item === "object") {
+            const inner = item;
+            if (typeof inner.value === "string")
+                return inner.value;
+        }
+        return "";
+    };
+    const text = Array.isArray(contents)
+        ? contents.map(flatten).filter(Boolean).join("\n\n")
+        : flatten(contents);
+    const trimmed = text.trim();
+    return trimmed.length ? trimmed : "No hover information at that position.";
+}
 export function flattenLocations(raw) {
     if (raw == null)
         return [];
@@ -94,6 +144,9 @@ export class TsLanguageServerSession {
     initPromise = null;
     exclusiveTail = Promise.resolve();
     openedUris = new Set();
+    documentVersions = new Map();
+    latestDiagnostics = new Map();
+    diagnosticsWaiters = new Map();
     constructor(workspaceRoot) {
         this.workspaceRoot = path.resolve(workspaceRoot);
     }
@@ -169,6 +222,14 @@ export class TsLanguageServerSession {
         connection.onError((err) => {
             void err;
         });
+        connection.onNotification("textDocument/publishDiagnostics", (params) => {
+            this.latestDiagnostics.set(params.uri, params.diagnostics ?? []);
+            const waiters = this.diagnosticsWaiters.get(params.uri);
+            if (waiters) {
+                for (const waiter of waiters)
+                    waiter(params.diagnostics ?? []);
+            }
+        });
         connection.listen();
         const rootUri = pathToFileURL(this.workspaceRoot).href;
         try {
@@ -202,6 +263,9 @@ export class TsLanguageServerSession {
                 this.connection = null;
                 this.initPromise = null;
                 this.openedUris.clear();
+                this.documentVersions.clear();
+                this.latestDiagnostics.clear();
+                this.diagnosticsWaiters.clear();
             }
             void code;
             void signal;
@@ -234,23 +298,70 @@ export class TsLanguageServerSession {
             return uri;
         }
         const c = await this.ensureInit();
+        const version = 1;
+        this.documentVersions.set(uri, version);
         c.sendNotification("textDocument/didOpen", {
             textDocument: {
                 uri,
                 languageId: languageIdForPath(filePath),
-                version: 1,
+                version,
                 text
             }
         });
         this.openedUris.add(uri);
         return uri;
     }
+    /** Reads the current disk content and sends didOpen (first time) or didChange (subsequent). */
+    async syncDocument(resolvedPath) {
+        const text = await fs.readFile(resolvedPath, "utf8");
+        const uri = pathToDocumentUri(resolvedPath);
+        const c = await this.ensureInit();
+        const nextVersion = (this.documentVersions.get(uri) ?? 0) + 1;
+        this.documentVersions.set(uri, nextVersion);
+        if (this.openedUris.has(uri)) {
+            c.sendNotification("textDocument/didChange", {
+                textDocument: { uri, version: nextVersion },
+                contentChanges: [{ text }]
+            });
+        }
+        else {
+            c.sendNotification("textDocument/didOpen", {
+                textDocument: {
+                    uri,
+                    languageId: languageIdForPath(resolvedPath),
+                    version: nextVersion,
+                    text
+                }
+            });
+            this.openedUris.add(uri);
+        }
+        return uri;
+    }
+    waitForDiagnostics(uri, timeoutMs) {
+        return new Promise((resolve) => {
+            let latest;
+            const listener = (diagnostics) => {
+                latest = diagnostics;
+            };
+            const existing = this.diagnosticsWaiters.get(uri) ?? [];
+            existing.push(listener);
+            this.diagnosticsWaiters.set(uri, existing);
+            setTimeout(() => {
+                const current = this.diagnosticsWaiters.get(uri) ?? [];
+                const filtered = current.filter((w) => w !== listener);
+                if (filtered.length)
+                    this.diagnosticsWaiters.set(uri, filtered);
+                else
+                    this.diagnosticsWaiters.delete(uri);
+                resolve(latest ?? this.latestDiagnostics.get(uri) ?? []);
+            }, timeoutMs);
+        });
+    }
     /** @param line — 1-based line index (editor-style). @param character — 0-based UTF-16 column (LSP). */
     async definition(filePath, line, character) {
         return this.runExclusive(async () => {
             const resolved = resolveInWorkspaceRoot(this.workspaceRoot, filePath);
-            const text = await fs.readFile(resolved, "utf8");
-            const uri = await this.ensureOpenDocument(resolved, text);
+            const uri = await this.syncDocument(resolved);
             const c = await this.ensureInit();
             const lspLine = Math.max(0, line - 1);
             const raw = await c.sendRequest("textDocument/definition", {
@@ -264,11 +375,32 @@ export class TsLanguageServerSession {
             return locs.map((l) => formatLocation(l)).join("\n");
         });
     }
+    async hover(filePath, line, character) {
+        return this.runExclusive(async () => {
+            const resolved = resolveInWorkspaceRoot(this.workspaceRoot, filePath);
+            const uri = await this.syncDocument(resolved);
+            const c = await this.ensureInit();
+            const lspLine = Math.max(0, line - 1);
+            const raw = await c.sendRequest("textDocument/hover", {
+                textDocument: { uri },
+                position: { line: lspLine, character }
+            });
+            return formatHoverContents(raw);
+        });
+    }
+    async diagnostics(filePath, timeoutMs = 1500) {
+        return this.runExclusive(async () => {
+            const resolved = resolveInWorkspaceRoot(this.workspaceRoot, filePath);
+            const uri = await this.syncDocument(resolved);
+            const diagnostics = await this.waitForDiagnostics(uri, timeoutMs);
+            const relative = path.relative(this.workspaceRoot, resolved) || filePath;
+            return formatDiagnostics(relative, diagnostics);
+        });
+    }
     async references(filePath, line, character) {
         return this.runExclusive(async () => {
             const resolved = resolveInWorkspaceRoot(this.workspaceRoot, filePath);
-            const text = await fs.readFile(resolved, "utf8");
-            const uri = await this.ensureOpenDocument(resolved, text);
+            const uri = await this.syncDocument(resolved);
             const c = await this.ensureInit();
             const lspLine = Math.max(0, line - 1);
             const raw = await c.sendRequest("textDocument/references", {

@@ -1,7 +1,17 @@
-import type { LanguageModelUsage, ModelMessage } from "ai";
+import type { ModelMessage } from "ai";
 import { LlmError } from "../../errors.js";
 import type { ChatMessage, LlmResponse, TokenUsage } from "../client.js";
 import { parseAgentOutput } from "../parseAgentOutput.js";
+
+// The function only consumes the numeric token fields, so we accept any
+// structural shape that carries them. This decouples us from the exact
+// `LanguageModelUsage` type, which has changed incompatibly between ai-sdk
+// minor versions (e.g. v5 vs v6 added `inputTokenDetails` / `outputTokenDetails`).
+export type ProviderUsage = {
+  inputTokens?: number;
+  outputTokens?: number;
+  totalTokens?: number;
+};
 
 export function toModelMessages(messages: ChatMessage[]): ModelMessage[] {
   return messages.map((message) => ({
@@ -35,7 +45,7 @@ export function parseTextResponse(text: string, providerName: string, usage?: To
 // try it before giving up.
 export function tryRecoverAgentResponse(
   rawText: string | undefined,
-  usage: LanguageModelUsage | undefined
+  usage: ProviderUsage | undefined
 ): LlmResponse | null {
   if (!rawText || !rawText.trim()) return null;
   try {

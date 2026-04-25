@@ -16,7 +16,13 @@ import { GlobTool, ReadFileTool, StrReplaceTool, WriteFileTool } from "./tools/f
 import { SearchTool } from "./tools/searchTool.js";
 import { ShellTool } from "./tools/shellTool.js";
 import { TsLanguageServerSession } from "./tools/tsLspSession.js";
-import { TsDefinitionTool, TsReferencesTool, TsWorkspaceSymbolsTool } from "./tools/tsLspTools.js";
+import {
+  TsDefinitionTool,
+  TsDiagnosticsTool,
+  TsHoverTool,
+  TsReferencesTool,
+  TsWorkspaceSymbolsTool
+} from "./tools/tsLspTools.js";
 import { ToolRegistry } from "./tools/types.js";
 
 type SessionState = {
@@ -95,6 +101,7 @@ function shouldPersistStepInfo(info: string): boolean {
     info.startsWith("Tool succeeded:") ||
     info.startsWith("Tool failed:") ||
     info.startsWith("Tool unavailable:") ||
+    info.startsWith("Auto-verified") ||
     info.startsWith("Rejected final answer:") ||
     info.startsWith("Model output invalid:") ||
     info.startsWith("Using raw model answer") ||
@@ -164,6 +171,8 @@ function createRuntime(options: RuntimeOptions) {
   toolRegistry.register(new TsWorkspaceSymbolsTool(tsLsp));
   toolRegistry.register(new TsDefinitionTool(tsLsp));
   toolRegistry.register(new TsReferencesTool(tsLsp));
+  toolRegistry.register(new TsHoverTool(tsLsp));
+  toolRegistry.register(new TsDiagnosticsTool(tsLsp));
 
   if (!options.dryRun) {
     toolRegistry.register(new WriteFileTool(workspaceRoot));
@@ -283,7 +292,15 @@ export function formatChatHeader(state: Pick<SessionState, "model" | "dryRun" | 
 }
 
 async function runChatSession(state: SessionState): Promise<number> {
-  const rl = createInterface({ input, output });
+  const rl = createInterface({
+    input,
+    output,
+    completer(line: string): [string[], string] {
+      const completions = getSlashCommandSuggestions(line);
+      return [completions, line];
+    }
+  });
+
   console.log(formatChatHeader(state));
   console.log(
     chalk.dim(

@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { flattenLocations, formatLocation, pathToDocumentUri } from "./tsLspSession.js";
+import {
+  flattenLocations,
+  formatDiagnostics,
+  formatHoverContents,
+  formatLocation,
+  pathToDocumentUri
+} from "./tsLspSession.js";
 
 describe("flattenLocations", () => {
   it("normalizes a single Location", () => {
@@ -44,6 +50,64 @@ describe("formatLocation", () => {
       }
     });
     expect(line).toContain(":4:0");
+  });
+});
+
+describe("formatDiagnostics", () => {
+  it("returns a clean message when there are no diagnostics", () => {
+    expect(formatDiagnostics("src/a.ts", [])).toContain("No TypeScript errors");
+  });
+
+  it("prints path:line:col severity code: message", () => {
+    const out = formatDiagnostics("src/a.ts", [
+      {
+        range: {
+          start: { line: 11, character: 4 },
+          end: { line: 11, character: 20 }
+        },
+        severity: 1,
+        code: 2339,
+        message: "Property 'setCompletion' does not exist on type 'Interface'."
+      }
+    ]);
+    expect(out).toContain("src/a.ts:12:4 error 2339:");
+    expect(out).toContain("'setCompletion'");
+  });
+
+  it("labels severity 2 as warning and severity 4 as hint", () => {
+    const warn = formatDiagnostics("a.ts", [
+      { range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } }, severity: 2, message: "w" }
+    ]);
+    const hint = formatDiagnostics("a.ts", [
+      { range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } }, severity: 4, message: "h" }
+    ]);
+    expect(warn).toContain("warning");
+    expect(hint).toContain("hint");
+  });
+});
+
+describe("formatHoverContents", () => {
+  it("extracts value from MarkupContent", () => {
+    const out = formatHoverContents({ contents: { kind: "markdown", value: "```ts\nconst rl: Interface\n```" } });
+    expect(out).toContain("const rl: Interface");
+  });
+
+  it("joins an array of marked strings", () => {
+    const out = formatHoverContents({
+      contents: [{ language: "typescript", value: "function foo(): void" }, "foo does a thing"]
+    });
+    expect(out).toContain("function foo(): void");
+    expect(out).toContain("foo does a thing");
+  });
+
+  it("handles a plain string", () => {
+    expect(formatHoverContents({ contents: "some hover text" })).toBe("some hover text");
+  });
+
+  it("returns a fallback when contents are missing", () => {
+    expect(formatHoverContents(null)).toContain("No hover information");
+    expect(formatHoverContents({})).toContain("No hover information");
+    expect(formatHoverContents({ contents: "   " })).toContain("No hover information");
   });
 });
 

@@ -14,7 +14,7 @@ import { GlobTool, ReadFileTool, StrReplaceTool, WriteFileTool } from "./tools/f
 import { SearchTool } from "./tools/searchTool.js";
 import { ShellTool } from "./tools/shellTool.js";
 import { TsLanguageServerSession } from "./tools/tsLspSession.js";
-import { TsDefinitionTool, TsReferencesTool, TsWorkspaceSymbolsTool } from "./tools/tsLspTools.js";
+import { TsDefinitionTool, TsDiagnosticsTool, TsHoverTool, TsReferencesTool, TsWorkspaceSymbolsTool } from "./tools/tsLspTools.js";
 import { ToolRegistry } from "./tools/types.js";
 function formatTokenUsage(usage) {
     return `tokens: ${usage.totalTokens} total (${usage.inputTokens} in, ${usage.outputTokens} out, ${usage.source})`;
@@ -124,6 +124,8 @@ function createRuntime(options) {
     toolRegistry.register(new TsWorkspaceSymbolsTool(tsLsp));
     toolRegistry.register(new TsDefinitionTool(tsLsp));
     toolRegistry.register(new TsReferencesTool(tsLsp));
+    toolRegistry.register(new TsHoverTool(tsLsp));
+    toolRegistry.register(new TsDiagnosticsTool(tsLsp));
     if (!options.dryRun) {
         toolRegistry.register(new WriteFileTool(workspaceRoot));
         toolRegistry.register(new StrReplaceTool(workspaceRoot));
@@ -217,7 +219,11 @@ export function formatChatHeader(state) {
     ].join("  ");
 }
 async function runChatSession(state) {
-    const rl = createInterface({ input, output });
+    const rl = createInterface({
+        input,
+        output,
+        completer: (line) => [getSlashCommandSuggestions(line), line]
+    });
     console.log(formatChatHeader(state));
     console.log(chalk.dim("Type a request. Session: /max N  /dryrun on|off  /config  /help  /reset  /tools  /exit\n"));
     while (true) {

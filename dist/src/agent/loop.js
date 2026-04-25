@@ -73,6 +73,9 @@ function finalClaimsWorkspaceChange(final) {
 function isMutatingTool(name) {
     return name === "writeFile" || name === "str_replace" || name === "shell";
 }
+function isTypeScriptFilePath(path) {
+    return typeof path === "string" && /\.(tsx?|mts|cts|jsx?|mjs|cjs)$/i.test(path);
+}
 function invalidModelOutputReminder(error) {
     return [
         `The previous model response could not be parsed as the required agent JSON: ${error.message}`,
@@ -236,6 +239,29 @@ export async function runAgentLoop(params) {
             sawSuccessfulMutation = true;
         }
         params.onStep?.(step, summarizeToolResult(result));
+        if (result.ok &&
+            (tool.name === "writeFile" || tool.name === "str_replace") &&
+            isTypeScriptFilePath(response.toolCall.arguments.path)) {
+            const diagnosticsTool = params.toolRegistry.get("tsDiagnostics");
+            if (diagnosticsTool) {
+                const mutatedPath = response.toolCall.arguments.path;
+                let diagnosticsResult;
+                try {
+                    diagnosticsResult = await diagnosticsTool.run({ path: mutatedPath });
+                }
+                catch (error) {
+                    diagnosticsResult = {
+                        ok: false,
+                        output: error instanceof Error ? error.message : String(error)
+                    };
+                }
+                messages.push({
+                    role: "tool",
+                    content: `Auto-verification after ${tool.name} on ${mutatedPath}:\n${formatToolObservation("tsDiagnostics", diagnosticsResult)}`
+                });
+                params.onStep?.(step, `Auto-verified ${mutatedPath}: ${summarizeText(diagnosticsResult.output, 120)}`);
+            }
+        }
     }
     return {
         stopReason: "max_steps_reached",

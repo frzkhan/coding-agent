@@ -9,6 +9,18 @@ import { ToolExecutionError } from "../errors.js";
 type LspPosition = { line: number; character: number };
 type LspRange = { start: LspPosition; end: LspPosition };
 type LspLocation = { uri: string; range: LspRange };
+type LspDiagnostic = {
+  range: LspRange;
+  severity?: number;
+  code?: number | string;
+  source?: string;
+  message: string;
+};
+type PublishDiagnosticsParams = {
+  uri: string;
+  version?: number;
+  diagnostics: LspDiagnostic[];
+};
 
 function resolveTlsCliPath(): string {
   const require = createRequire(import.meta.url);
@@ -85,6 +97,56 @@ function resolveInWorkspaceRoot(workspaceRoot: string, targetPath: string): stri
   return resolved;
 }
 
+function severityLabel(severity: number | undefined): string {
+  switch (severity) {
+    case 1:
+      return "error";
+    case 2:
+      return "warning";
+    case 3:
+      return "info";
+    case 4:
+      return "hint";
+    default:
+      return "info";
+  }
+}
+
+export function formatDiagnostics(relativePath: string, diagnostics: LspDiagnostic[]): string {
+  if (!diagnostics.length) return "No TypeScript errors or warnings.";
+  return diagnostics
+    .map((d) => {
+      const start = d.range.start;
+      const line = start.line + 1;
+      const char = start.character;
+      const code = d.code !== undefined && d.code !== "" ? ` ${d.code}` : "";
+      return `${relativePath}:${line}:${char} ${severityLabel(d.severity)}${code}: ${d.message}`;
+    })
+    .join("\n");
+}
+
+export function formatHoverContents(raw: unknown): string {
+  if (!raw || typeof raw !== "object") return "No hover information at that position.";
+  const o = raw as Record<string, unknown>;
+  const contents = o.contents;
+  if (contents == null) return "No hover information at that position.";
+
+  const flatten = (item: unknown): string => {
+    if (typeof item === "string") return item;
+    if (item && typeof item === "object") {
+      const inner = item as Record<string, unknown>;
+      if (typeof inner.value === "string") return inner.value;
+    }
+    return "";
+  };
+
+  const text = Array.isArray(contents)
+    ? contents.map(flatten).filter(Boolean).join("\n\n")
+    : flatten(contents);
+  const trimmed = text.trim();
+  return trimmed.length ? trimmed : "No hover information at that position.";
+}
+
 export function flattenLocations(raw: unknown): LspLocation[] {
   if (raw == null) return [];
   if (Array.isArray(raw)) {
@@ -110,6 +172,9 @@ export class TsLanguageServerSession {
   private initPromise: Promise<void> | null = null;
   private exclusiveTail: Promise<unknown> = Promise.resolve();
   private openedUris = new Set<string>();
+  private documentVersions = new Map<string, number>();
+  private latestDiagnostics = new Map<string, LspDiagnostic[]>();
+  private diagnosticsWaiters = new Map<string, Array<(diagnostics: LspDiagnostic[]) => void>>();
 
   constructor(workspaceRoot: string) {
     this.workspaceRoot = path.resolve(workspaceRoot);
@@ -198,6 +263,13 @@ export class TsLanguageServerSession {
     connection.onError((err) => {
       void err;
     });
+    connection.onNotification("textDocument/publishDiagnostics", (params: PublishDiagnosticsParams) => {
+      this.latestDiagnostics.set(params.uri, params.diagnostics ?? []);
+      const waiters = this.diagnosticsWaiters.get(params.uri);
+      if (waiters) {
+        for (const waiter of waiters) waiter(params.diagnostics ?? []);
+      }
+    });
     connection.listen();
 
     const rootUri = pathToFileURL(this.workspaceRoot).href;
@@ -237,6 +309,9 @@ export class TsLanguageServerSession {
         this.connection = null;
         this.initPromise = null;
         this.openedUris.clear();
+        this.documentVersions.clear();
+        this.latestDiagnostics.clear();
+        this.diagnosticsWaiters.clear();
       }
       void code;
       void signal;
@@ -270,11 +345,13 @@ export class TsLanguageServerSession {
       return uri;
     }
     const c = await this.ensureInit();
+    const version = 1;
+    this.documentVersions.set(uri, version);
     c.sendNotification("textDocument/didOpen", {
       textDocument: {
         uri,
         languageId: languageIdForPath(filePath),
-        version: 1,
+        version,
         text
       }
     });
@@ -282,12 +359,86 @@ export class TsLanguageServerSession {
     return uri;
   }
 
+  /** Reads the current disk content and sends didOpen (first time) or didChange (subsequent). */
+  private async syncDocument(resolvedPath: string): Promise<string> {
+    const text = await fs.readFile(resolvedPath, "utf8");
+    const uri = pathToDocumentUri(resolvedPath);
+    // The next published diagnostics are for the content we are about to sync; do not merge with a
+    // pre-change "clean" result while we wait.
+    this.latestDiagnostics.delete(uri);
+    const c = await this.ensureInit();
+    const nextVersion = (this.documentVersions.get(uri) ?? 0) + 1;
+    this.documentVersions.set(uri, nextVersion);
+    if (this.openedUris.has(uri)) {
+      c.sendNotification("textDocument/didChange", {
+        textDocument: { uri, version: nextVersion },
+        contentChanges: [{ text }]
+      });
+    } else {
+      c.sendNotification("textDocument/didOpen", {
+        textDocument: {
+          uri,
+          languageId: languageIdForPath(resolvedPath),
+          version: nextVersion,
+          text
+        }
+      });
+      this.openedUris.add(uri);
+    }
+    return uri;
+  }
+
+  /**
+   * Wait until tsserver has had time to republish after didChange. It often sends an early empty
+   * `publishDiagnostics` and then a second batch once checking finishes; a fixed short timeout can
+   * resolve after the first batch and report a false "no errors".
+   */
+  private waitForDiagnostics(uri: string, maxWaitMs: number, quietMs = 500): Promise<LspDiagnostic[]> {
+    return new Promise((resolve) => {
+      let latest: LspDiagnostic[] = [];
+      let debounceTimer: ReturnType<typeof setTimeout> | undefined;
+      let maxTimer: ReturnType<typeof setTimeout> | undefined;
+      let finished = false;
+
+      const removeListener = (): void => {
+        const current = this.diagnosticsWaiters.get(uri) ?? [];
+        const filtered = current.filter((w) => w !== listener);
+        if (filtered.length) this.diagnosticsWaiters.set(uri, filtered);
+        else this.diagnosticsWaiters.delete(uri);
+      };
+
+      const finish = (value: LspDiagnostic[]): void => {
+        if (finished) return;
+        finished = true;
+        if (debounceTimer) clearTimeout(debounceTimer);
+        if (maxTimer) clearTimeout(maxTimer);
+        removeListener();
+        resolve(value);
+      };
+
+      const listener = (diagnostics: LspDiagnostic[]): void => {
+        latest = diagnostics;
+        if (debounceTimer) clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(() => {
+          finish(this.latestDiagnostics.get(uri) ?? latest);
+        }, quietMs);
+      };
+
+      const existing = this.diagnosticsWaiters.get(uri) ?? [];
+      existing.push(listener);
+      this.diagnosticsWaiters.set(uri, existing);
+
+      maxTimer = setTimeout(() => {
+        finish(this.latestDiagnostics.get(uri) ?? latest);
+      }, maxWaitMs);
+    });
+  }
+
   /** @param line — 1-based line index (editor-style). @param character — 0-based UTF-16 column (LSP). */
   async definition(filePath: string, line: number, character: number): Promise<string> {
     return this.runExclusive(async () => {
       const resolved = resolveInWorkspaceRoot(this.workspaceRoot, filePath);
-      const text = await fs.readFile(resolved, "utf8");
-      const uri = await this.ensureOpenDocument(resolved, text);
+      const uri = await this.syncDocument(resolved);
       const c = await this.ensureInit();
       const lspLine = Math.max(0, line - 1);
       const raw = await c.sendRequest("textDocument/definition", {
@@ -302,11 +453,34 @@ export class TsLanguageServerSession {
     });
   }
 
+  async hover(filePath: string, line: number, character: number): Promise<string> {
+    return this.runExclusive(async () => {
+      const resolved = resolveInWorkspaceRoot(this.workspaceRoot, filePath);
+      const uri = await this.syncDocument(resolved);
+      const c = await this.ensureInit();
+      const lspLine = Math.max(0, line - 1);
+      const raw = await c.sendRequest("textDocument/hover", {
+        textDocument: { uri },
+        position: { line: lspLine, character }
+      });
+      return formatHoverContents(raw);
+    });
+  }
+
+  async diagnostics(filePath: string, timeoutMs = 5000): Promise<string> {
+    return this.runExclusive(async () => {
+      const resolved = resolveInWorkspaceRoot(this.workspaceRoot, filePath);
+      const uri = await this.syncDocument(resolved);
+      const diagnostics = await this.waitForDiagnostics(uri, timeoutMs);
+      const relative = path.relative(this.workspaceRoot, resolved) || filePath;
+      return formatDiagnostics(relative, diagnostics);
+    });
+  }
+
   async references(filePath: string, line: number, character: number): Promise<string> {
     return this.runExclusive(async () => {
       const resolved = resolveInWorkspaceRoot(this.workspaceRoot, filePath);
-      const text = await fs.readFile(resolved, "utf8");
-      const uri = await this.ensureOpenDocument(resolved, text);
+      const uri = await this.syncDocument(resolved);
       const c = await this.ensureInit();
       const lspLine = Math.max(0, line - 1);
       const raw = await c.sendRequest("textDocument/references", {

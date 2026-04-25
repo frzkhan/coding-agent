@@ -86,3 +86,59 @@ export class TsReferencesTool implements Tool {
     }
   }
 }
+
+/** Hover info at a position. Returns the type/signature the LSP would show on hover. */
+export class TsHoverTool implements Tool {
+  readonly name = "tsHover";
+  readonly parameters = '{ "path": "src/file.ts", "line": 1, "character": 0 }';
+  readonly description =
+    "Show the type signature / doc for the symbol at a TypeScript/JavaScript source position. Use this before calling methods you are unsure about.";
+
+  constructor(private readonly session: TsLanguageServerSession) {}
+
+  async run(args: Record<string, unknown>): Promise<ToolResult> {
+    const filePath = String(args.path ?? "").trim();
+    if (!filePath) {
+      return { ok: false, output: "Missing path (file relative to workspace)." };
+    }
+    const pos = parseLineChar(args);
+    if (!pos) {
+      return { ok: false, output: "Missing or invalid line (1-based) and character (0-based)." };
+    }
+    try {
+      const out = await this.session.hover(filePath, pos.line, pos.character);
+      return { ok: true, output: out };
+    } catch (e) {
+      const message = e instanceof ToolExecutionError ? e.message : String(e);
+      return { ok: false, output: message };
+    }
+  }
+}
+
+/**
+ * TypeScript compile diagnostics for a single file. The loop also auto-runs
+ * this after a successful writeFile / str_replace on a .ts/.tsx file, so you
+ * typically will not need to call it by hand.
+ */
+export class TsDiagnosticsTool implements Tool {
+  readonly name = "tsDiagnostics";
+  readonly parameters = '{ "path": "src/file.ts" }';
+  readonly description =
+    "Return TypeScript compile errors and warnings for a file. Run this after editing a .ts/.tsx file to verify the change compiles.";
+
+  constructor(private readonly session: TsLanguageServerSession) {}
+
+  async run(args: Record<string, unknown>): Promise<ToolResult> {
+    const filePath = String(args.path ?? "").trim();
+    if (!filePath) {
+      return { ok: false, output: "Missing path (file relative to workspace)." };
+    }
+    try {
+      const out = await this.session.diagnostics(filePath);
+      return { ok: true, output: out };
+    } catch (e) {
+      const message = e instanceof ToolExecutionError ? e.message : String(e);
+      return { ok: false, output: message };
+    }
+  }
+}

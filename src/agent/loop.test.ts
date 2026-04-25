@@ -70,6 +70,18 @@ class MutatingTool implements Tool {
   }
 }
 
+class RecordingDiagnosticsTool implements Tool {
+  readonly name = "tsDiagnostics";
+  readonly calls: Array<Record<string, unknown>> = [];
+
+  constructor(private readonly output: string) {}
+
+  async run(args: Record<string, unknown>) {
+    this.calls.push(args);
+    return { ok: true, output: this.output };
+  }
+}
+
 describe("runAgentLoop", () => {
   it("finishes when model returns done", async () => {
     const registry = new ToolRegistry();
@@ -279,6 +291,69 @@ describe("runAgentLoop", () => {
     expect(result.stopReason).toBe("max_steps_reached");
     expect(updates.some((info) => info.startsWith("Rejected final answer:"))).toBe(true);
     expect(updates.some((info) => info === "Model produced final answer")).toBe(false);
+  });
+
+  it("auto-runs tsDiagnostics after a successful str_replace on a .ts file", async () => {
+    const registry = new ToolRegistry();
+    registry.register(new MutatingTool());
+    const diagnostics = new RecordingDiagnosticsTool("No TypeScript errors or warnings.");
+    registry.register(diagnostics);
+    const updates: string[] = [];
+    const client = new SequenceClient([
+      {
+        text: "need edit",
+        done: false,
+        toolCall: { name: "str_replace", arguments: { path: "src/cli.ts", old_string: "a", new_string: "b" } }
+      },
+      { text: "Updated the CLI.", done: true }
+    ]);
+
+    const result = await runAgentLoop({
+      llmClient: client,
+      toolRegistry: registry,
+      maxSteps: 3,
+      systemPrompt: "system",
+      task: "Update the CLI output",
+      onStep: (_step, info) => updates.push(info)
+    });
+
+    expect(result.stopReason).toBe("done");
+    expect(diagnostics.calls).toEqual([{ path: "src/cli.ts" }]);
+    expect(
+      result.messages.some(
+        (m) =>
+          m.role === "tool" &&
+          m.content.includes("Auto-verification after str_replace on src/cli.ts") &&
+          m.content.includes("No TypeScript errors")
+      )
+    ).toBe(true);
+    expect(updates.some((info) => info.startsWith("Auto-verified src/cli.ts"))).toBe(true);
+  });
+
+  it("does not auto-run tsDiagnostics for non-TS paths", async () => {
+    const registry = new ToolRegistry();
+    registry.register(new MutatingTool());
+    const diagnostics = new RecordingDiagnosticsTool("No TypeScript errors or warnings.");
+    registry.register(diagnostics);
+    const client = new SequenceClient([
+      {
+        text: "need edit",
+        done: false,
+        toolCall: { name: "str_replace", arguments: { path: "README.md", old_string: "old", new_string: "new" } }
+      },
+      { text: "Updated the README.", done: true }
+    ]);
+
+    const result = await runAgentLoop({
+      llmClient: client,
+      toolRegistry: registry,
+      maxSteps: 3,
+      systemPrompt: "system",
+      task: "Update the README"
+    });
+
+    expect(result.stopReason).toBe("done");
+    expect(diagnostics.calls).toEqual([]);
   });
 
   it("accepts a change-complete final answer after a mutating tool succeeds", async () => {

@@ -42,9 +42,25 @@ export function loadGitignorePatterns(workspaceRoot: string): string[] {
     .filter((line) => line && !line.startsWith("#") && !line.startsWith("!"));
 }
 
+/**
+ * TypeScript declaration files under node_modules are exempt from the ignore
+ * rule so the agent can read third-party API surfaces (e.g. @types/node). Only
+ * `.d.ts` is allowed — never source `.js` or `.ts` — and `.git` / `.env` are
+ * still blocked even when ending in `.d.ts`.
+ */
+export function isDeclarationInNodeModules(relativePath: string): boolean {
+  const normalized = stripLeadingSlash(toPosixPath(relativePath));
+  if (!normalized.endsWith(".d.ts")) return false;
+  const parts = normalized.split("/");
+  if (parts.some((part) => part === ".git" || part === ".env")) return false;
+  return parts.includes("node_modules");
+}
+
 export function isIgnoredPath(relativePath: string, gitignorePatterns: string[] = []): boolean {
   const normalized = stripLeadingSlash(toPosixPath(relativePath));
   if (!normalized) return false;
+
+  if (isDeclarationInNodeModules(normalized)) return false;
 
   const parts = normalized.split("/");
   if (parts.some((part) => DEFAULT_IGNORED_DIRS.has(part))) return true;

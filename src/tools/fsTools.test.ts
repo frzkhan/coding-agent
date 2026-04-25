@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -55,6 +55,38 @@ describe("ReadFileTool", () => {
 
       expect(result.ok).toBe(false);
       expect(result.output).toContain("ignored");
+    });
+  });
+
+  it("refuses .js source files under node_modules", async () => {
+    await withTempWorkspace(async (workspace) => {
+      const modDir = path.join(workspace, "node_modules", "some-pkg");
+      await mkdir(modDir, { recursive: true });
+      await writeFile(path.join(modDir, "index.js"), "module.exports = {};\n", "utf8");
+
+      const result = await new ReadFileTool(workspace).run({ path: "node_modules/some-pkg/index.js" });
+
+      expect(result.ok).toBe(false);
+      expect(result.output).toContain("ignored");
+    });
+  });
+
+  it("allows .d.ts files under node_modules", async () => {
+    await withTempWorkspace(async (workspace) => {
+      const typesDir = path.join(workspace, "node_modules", "@types", "node", "readline");
+      await mkdir(typesDir, { recursive: true });
+      await writeFile(
+        path.join(typesDir, "promises.d.ts"),
+        "export function createInterface(options: unknown): unknown;\n",
+        "utf8"
+      );
+
+      const result = await new ReadFileTool(workspace).run({
+        path: "node_modules/@types/node/readline/promises.d.ts"
+      });
+
+      expect(result.ok).toBe(true);
+      expect(result.output).toContain("createInterface");
     });
   });
 });
