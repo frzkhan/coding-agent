@@ -44,8 +44,28 @@ function summarizeToolResult(result) {
     const status = result.ok ? "succeeded" : "failed";
     return `Tool ${status}: ${summarizeText(result.output, 140)}`;
 }
-function taskRequestsWorkspaceChange(task) {
-    return /\b(add|change|create|delete|edit|fix|implement|modify|refactor|remove|rename|replace|update|write)\b/i.test(task ?? "");
+// An error paste or traceback with no explicit instruction is treated as an
+// implicit fix request, so the reject-final-without-mutation guard still fires.
+export function looksLikeErrorPaste(task) {
+    if (!task)
+        return false;
+    if (/\b(Error|TypeError|RangeError|ReferenceError|SyntaxError|URIError|EvalError|Exception)\b:/.test(task)) {
+        return true;
+    }
+    if (/Traceback \(most recent call last\)/.test(task))
+        return true;
+    if (/\bat .+:\d+(?::\d+)?\b/.test(task))
+        return true;
+    if (/File ".+?", line \d+/.test(task))
+        return true;
+    return false;
+}
+export function taskRequestsWorkspaceChange(task) {
+    const text = task ?? "";
+    if (/\b(add|change|create|delete|edit|fix|implement|modify|refactor|remove|rename|replace|update|write)\b/i.test(text)) {
+        return true;
+    }
+    return looksLikeErrorPaste(text);
 }
 function finalClaimsWorkspaceChange(final) {
     return /\b(applied|changed|completed|created|deleted|edited|fixed|implemented|modified|removed|renamed|replaced|updated|wrote)\b/i.test(final);
@@ -60,6 +80,18 @@ function invalidModelOutputReminder(error) {
         "If you call a tool, include all required arguments for that specific tool in toolCall.arguments.",
         'Example search call: {"thought":"searching","done":false,"final":"","toolCall":{"name":"search","arguments":{"pattern":"label","include":"src/**/*.ts"}}}'
     ].join("\n");
+}
+// Heuristic: treat raw model text as "still planning" when it clearly
+// announces another action rather than giving a self-contained answer.
+// These models often emit a thought like `Thinking: ... Let me read X.`
+// when the structured output fails, which is not a final answer.
+export function looksLikeContinuation(text) {
+    const normalized = text.replace(/\s+/g, " ").trim();
+    if (!normalized)
+        return false;
+    if (/^(thinking|thought)\s*[:\-]/i.test(normalized))
+        return true;
+    return /\b(let me|let's|i'?ll|i am going to|i'?m going to|i will|i need to|i should|next,? i|now i'?ll|now i will)\b[^.?!]{0,80}\b(search|look|read|check|verify|confirm|find|inspect|examine|explore|review|investigate|open|list|run|call)\b/i.test(normalized);
 }
 export async function runAgentLoop(params) {
     let messages = params.messages
@@ -100,7 +132,9 @@ export async function runAgentLoop(params) {
                 throw error;
             }
             const rawFallback = error.rawText?.trim();
-            if (rawFallback && sawToolResult && !taskRequestsWorkspaceChange(params.task)) {
+            const canSalvageRaw = !!rawFallback && sawToolResult && !taskRequestsWorkspaceChange(params.task);
+            const rawLooksLikePlan = !!rawFallback && looksLikeContinuation(rawFallback);
+            if (canSalvageRaw && !rawLooksLikePlan) {
                 params.onStep?.(step, "Using raw model answer after invalid structured output");
                 messages.push({
                     role: "assistant",
@@ -115,7 +149,12 @@ export async function runAgentLoop(params) {
                     tokenUsage
                 };
             }
-            params.onStep?.(step, `Model output invalid: ${summarizeText(error.message, 160)}`);
+            if (rawLooksLikePlan) {
+                params.onStep?.(step, `Model output invalid (raw looked like a plan, not an answer): ${summarizeText(error.message, 160)}`);
+            }
+            else {
+                params.onStep?.(step, `Model output invalid: ${summarizeText(error.message, 160)}`);
+            }
             messages.push({
                 role: "user",
                 content: invalidModelOutputReminder(error)

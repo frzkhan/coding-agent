@@ -33,4 +33,15 @@ describe("parseAgentOutput", () => {
         expect(output.done).toBe(true);
         expect(output.final).toBe("All set.");
     });
+    it("drops an empty toolCall alongside a done final answer", () => {
+        const output = parseAgentOutput('{"thought":"t","done":true,"final":"No git tools exist here.","toolCall":{}}');
+        expect(output.done).toBe(true);
+        expect(output.final).toBe("No git tools exist here.");
+        expect(output.toolCall).toBeUndefined();
+    });
+    it("drops a toolCall without a valid name", () => {
+        const output = parseAgentOutput('{"thought":"t","done":true,"final":"Answer.","toolCall":{"name":"","arguments":{}}}');
+        expect(output.done).toBe(true);
+        expect(output.toolCall).toBeUndefined();
+    });
 });

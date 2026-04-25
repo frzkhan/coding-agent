@@ -63,10 +63,27 @@ function summarizeToolResult(result: ToolResult): string {
   return `Tool ${status}: ${summarizeText(result.output, 140)}`;
 }
 
-function taskRequestsWorkspaceChange(task: string | undefined): boolean {
-  return /\b(add|change|create|delete|edit|fix|implement|modify|refactor|remove|rename|replace|update|write)\b/i.test(
-    task ?? ""
-  );
+// An error paste or traceback with no explicit instruction is treated as an
+// implicit fix request, so the reject-final-without-mutation guard still fires.
+export function looksLikeErrorPaste(task: string): boolean {
+  if (!task) return false;
+  if (/\b(Error|TypeError|RangeError|ReferenceError|SyntaxError|URIError|EvalError|Exception)\b:/.test(task)) {
+    return true;
+  }
+  if (/Traceback \(most recent call last\)/.test(task)) return true;
+  if (/\bat .+:\d+(?::\d+)?\b/.test(task)) return true;
+  if (/File ".+?", line \d+/.test(task)) return true;
+  return false;
+}
+
+export function taskRequestsWorkspaceChange(task: string | undefined): boolean {
+  const text = task ?? "";
+  if (
+    /\b(add|change|create|delete|edit|fix|implement|modify|refactor|remove|rename|replace|update|write)\b/i.test(text)
+  ) {
+    return true;
+  }
+  return looksLikeErrorPaste(text);
 }
 
 function finalClaimsWorkspaceChange(final: string): boolean {

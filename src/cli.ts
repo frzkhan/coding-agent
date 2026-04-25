@@ -114,7 +114,7 @@ export const SLASH_COMMANDS = [
   { command: "/dryrun on|off", description: "Toggle write/shell tools" }
 ];
 
-function parseSessionCommand(input: string): SessionCommand | null {
+export function parseSessionCommand(input: string): SessionCommand | null {
   const text = input.trim();
   if (!text.startsWith("/")) return null;
 

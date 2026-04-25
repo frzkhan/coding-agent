@@ -65,6 +65,16 @@ function shouldPersistStepInfo(info) {
         info.startsWith("Model produced final answer") ||
         info.startsWith("Compacted context"));
 }
+export const SLASH_COMMANDS = [
+    { command: "/exit", description: "End session" },
+    { command: "/quit", description: "End session" },
+    { command: "/help", description: "Show commands" },
+    { command: "/reset", description: "Clear conversation history" },
+    { command: "/tools", description: "List enabled tools" },
+    { command: "/config", description: "Show current session config" },
+    { command: "/max N", description: "Set max steps per turn" },
+    { command: "/dryrun on|off", description: "Toggle write/shell tools" }
+];
 export function parseSessionCommand(input) {
     const text = input.trim();
     if (!text.startsWith("/"))
@@ -86,6 +96,13 @@ export function parseSessionCommand(input) {
     if (dryRunMatch)
         return { type: "dryrun", value: dryRunMatch[1] === "on" };
     return null;
+}
+function getSlashCommandSuggestions(input) {
+    const text = input.trim();
+    if (!text.startsWith("/"))
+        return [];
+    const partial = text.slice(1).toLowerCase();
+    return SLASH_COMMANDS.filter(cmd => cmd.command.toLowerCase().includes(partial)).map(cmd => cmd.command);
 }
 function createRuntime(options) {
     const llmClient = options.config.provider === "openai"

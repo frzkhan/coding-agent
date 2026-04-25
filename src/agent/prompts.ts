@@ -14,6 +14,7 @@ export function buildSystemPrompt(toolRegistry: ToolRegistry, workspaceRoot: str
     "Use available tools when needed, then decide if the task is done.",
     "When calling a tool, use exactly the argument names shown in the tool list. Include all required arguments in the same toolCall.",
     "For code change requests, do not say the work is complete until you have observed a successful writeFile, str_replace, or shell tool result.",
+    "If the user pastes an error message, stack trace, traceback, or log snippet without an explicit instruction, treat it as an implicit request to diagnose the root cause in the workspace and apply a fix. Use search / readFile / tsWorkspaceSymbols to locate the offending code, then use str_replace or writeFile to fix it. Do not stop at explanation unless the error is clearly outside your control (third-party dependency, OS-level, or network).",
     "Always return strict JSON with this shape.",
     "Do not wrap JSON in markdown code fences. Do not add extra explanatory text.",
     "Return exactly one JSON object.",

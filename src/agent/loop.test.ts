@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { looksLikeContinuation, runAgentLoop } from "./loop.js";
+import { looksLikeContinuation, looksLikeErrorPaste, runAgentLoop, taskRequestsWorkspaceChange } from "./loop.js";
 import { LlmError } from "../errors.js";
 import type { ChatMessage, LlmClient, LlmGenerateOptions, LlmResponse } from "../llm/client.js";
 import { ToolRegistry, type Tool } from "../tools/types.js";
@@ -411,6 +411,52 @@ describe("runAgentLoop", () => {
     expect(result.stopReason).toBe("done");
     expect(result.messages.some((m) => m.role === "tool" && m.content.includes("Tool throw failed"))).toBe(true);
     expect(result.messages.some((m) => m.role === "tool" && m.content.includes("boom"))).toBe(true);
+  });
+});
+
+describe("looksLikeErrorPaste", () => {
+  it("detects named JS errors with a colon", () => {
+    expect(looksLikeErrorPaste("TypeError: callback is not a function")).toBe(true);
+    expect(looksLikeErrorPaste("ReferenceError: foo is not defined")).toBe(true);
+    expect(looksLikeErrorPaste("SyntaxError: Unexpected token ')'")).toBe(true);
+  });
+
+  it("detects JS stack frames", () => {
+    expect(looksLikeErrorPaste("    at runChatSession (/path/cli.ts:308:19)")).toBe(true);
+    expect(looksLikeErrorPaste("at Object.<anonymous> (src/cli.ts:312:5)")).toBe(true);
+  });
+
+  it("detects Python tracebacks", () => {
+    expect(looksLikeErrorPaste("Traceback (most recent call last):")).toBe(true);
+    expect(looksLikeErrorPaste('  File "main.py", line 42, in <module>')).toBe(true);
+  });
+
+  it("does not flag prose that merely mentions error words", () => {
+    expect(looksLikeErrorPaste("How should I handle the Error object in JS?")).toBe(false);
+    expect(looksLikeErrorPaste("add error handling to the cli")).toBe(false);
+    expect(looksLikeErrorPaste("")).toBe(false);
+  });
+});
+
+describe("taskRequestsWorkspaceChange", () => {
+  it("returns true for imperative change verbs", () => {
+    expect(taskRequestsWorkspaceChange("fix the bug in loop.ts")).toBe(true);
+    expect(taskRequestsWorkspaceChange("Update the CLI output")).toBe(true);
+    expect(taskRequestsWorkspaceChange("refactor the completer")).toBe(true);
+  });
+
+  it("returns true for error pastes with no imperative", () => {
+    expect(
+      taskRequestsWorkspaceChange(
+        "Tab completion error: TypeError: callback is not a function\n    at /path/cli.ts:312:5"
+      )
+    ).toBe(true);
+  });
+
+  it("returns false for plain questions", () => {
+    expect(taskRequestsWorkspaceChange("what does this function do?")).toBe(false);
+    expect(taskRequestsWorkspaceChange("explain the token counting")).toBe(false);
+    expect(taskRequestsWorkspaceChange(undefined)).toBe(false);
   });
 });
 

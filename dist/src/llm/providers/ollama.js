@@ -2,7 +2,7 @@ import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import { generateObject, NoObjectGeneratedError } from "ai";
 import { LlmError } from "../../errors.js";
 import { agentOutputSchema } from "../parseAgentOutput.js";
-import { toModelMessages } from "./aiSdk.js";
+import { toModelMessages, tryRecoverAgentResponse } from "./aiSdk.js";
 function toTokenUsage(usage) {
     return {
         inputTokens: usage.inputTokens,
@@ -45,9 +45,15 @@ export class OllamaClient {
             if (error instanceof LlmError) {
                 throw error;
             }
+            const rawText = NoObjectGeneratedError.isInstance(error) ? error.text : undefined;
+            const errorUsage = NoObjectGeneratedError.isInstance(error) ? error.usage : undefined;
+            const recovered = tryRecoverAgentResponse(rawText, errorUsage);
+            if (recovered) {
+                return recovered;
+            }
             const message = error instanceof Error ? error.message : String(error);
             throw new LlmError(`Ollama request failed: ${message}`, {
-                rawText: NoObjectGeneratedError.isInstance(error) ? error.text : undefined
+                rawText
             });
         }
     }

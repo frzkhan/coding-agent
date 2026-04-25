@@ -135,25 +135,34 @@ function normalizeParsedAgentJson(raw) {
     }
     if (o.toolCall !== undefined && o.toolCall !== null && typeof o.toolCall === "object") {
         const tc = { ...o.toolCall };
-        const args = tc.arguments;
-        if (typeof args === "string") {
-            try {
-                tc.arguments = JSON.parse(args);
+        const hasValidName = typeof tc.name === "string" && tc.name.trim().length > 0;
+        if (!hasValidName) {
+            // Common model mistake: emit `toolCall: {}` (or a toolCall without a
+            // name) alongside a real `final` / `done: true`. Treat that as "no
+            // tool call" so the response still parses.
+            delete o.toolCall;
+        }
+        else {
+            const args = tc.arguments;
+            if (typeof args === "string") {
+                try {
+                    tc.arguments = JSON.parse(args);
+                }
+                catch {
+                    tc.arguments = {};
+                }
             }
-            catch {
+            else if (args === undefined || args === null) {
                 tc.arguments = {};
             }
+            else if (Array.isArray(args)) {
+                tc.arguments = {};
+            }
+            else if (typeof args !== "object") {
+                tc.arguments = {};
+            }
+            o.toolCall = tc;
         }
-        else if (args === undefined || args === null) {
-            tc.arguments = {};
-        }
-        else if (Array.isArray(args)) {
-            tc.arguments = {};
-        }
-        else if (typeof args !== "object") {
-            tc.arguments = {};
-        }
-        o.toolCall = tc;
     }
     if (o.done === undefined) {
         const hasFinal = typeof o.final === "string" && o.final.trim().length > 0;
