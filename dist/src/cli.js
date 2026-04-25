@@ -20,6 +20,18 @@ import { ToolRegistry } from "./tools/types.js";
 function formatTokenUsage(usage) {
     return `tokens: ${usage.totalTokens} total (${usage.inputTokens} in, ${usage.outputTokens} out, ${usage.source})`;
 }
+function truncateStatus(value, maxLength = 80) {
+    return value.length <= maxLength ? value : `${value.slice(0, maxLength - 3)}...`;
+}
+function shouldPersistStepInfo(info) {
+    return (info.startsWith("Model intent:") ||
+        info.startsWith("Calling tool:") ||
+        info.startsWith("Tool succeeded:") ||
+        info.startsWith("Tool failed:") ||
+        info.startsWith("Tool unavailable:") ||
+        info.startsWith("Model produced final answer") ||
+        info.startsWith("Compacted context"));
+}
 export function parseSessionCommand(input) {
     const text = input.trim();
     if (!text.startsWith("/"))
@@ -100,12 +112,18 @@ async function runSingleTurn(session, task, useInteractiveUi, onStepOverride) {
             if (info.startsWith("Calling model")) {
                 spinner?.start();
                 spinner.text = `Step ${step}/${session.maxSteps}: thinking (${info.replace("Calling model with ", "")})`;
-                progress?.update(step, { status: "asking model" });
+                progress?.update(step, { status: truncateStatus(info) });
                 return;
+            }
+            if (shouldPersistStepInfo(info)) {
+                spinner?.stopAndPersist({
+                    symbol: chalk.dim("•"),
+                    text: `Step ${step}/${session.maxSteps}: ${truncateStatus(info, 180)}`
+                });
             }
             spinner?.start();
             spinner.text = `Step ${step}/${session.maxSteps}: ${info}`;
-            progress?.update(step, { status: info });
+            progress?.update(step, { status: truncateStatus(info) });
         },
         onModelChunk: (step, chunk) => {
             const nextChars = (streamedCharsByStep.get(step) ?? 0) + chunk.length;
@@ -118,7 +136,7 @@ async function runSingleTurn(session, task, useInteractiveUi, onStepOverride) {
             }
             spinner?.start();
             spinner.text = `Step ${step}/${session.maxSteps}: receiving model stream (${nextChars} chars)`;
-            progress?.update(step, { status: "streaming model" });
+            progress?.update(step, { status: `streaming model (${nextChars} chars)` });
         }
     });
     progress?.stop();

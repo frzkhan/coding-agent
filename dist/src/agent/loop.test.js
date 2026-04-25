@@ -62,6 +62,30 @@ describe("runAgentLoop", () => {
         expect(result.stopReason).toBe("done");
         expect(result.steps).toBe(2);
     });
+    it("reports model intent, tool call details, and tool result in step updates", async () => {
+        const registry = new ToolRegistry();
+        registry.register(new EchoTool());
+        const updates = [];
+        const client = new SequenceClient([
+            {
+                text: "Inspecting the requested value before answering.",
+                done: false,
+                toolCall: { name: "echo", arguments: { value: "hello" } }
+            },
+            { text: "complete", done: true }
+        ]);
+        await runAgentLoop({
+            llmClient: client,
+            toolRegistry: registry,
+            maxSteps: 3,
+            systemPrompt: "system",
+            task: "task",
+            onStep: (_step, info) => updates.push(info)
+        });
+        expect(updates.some((info) => info.includes("Model intent: Inspecting"))).toBe(true);
+        expect(updates.some((info) => info.includes("Calling tool: echo") && info.includes('value="hello"'))).toBe(true);
+        expect(updates.some((info) => info.includes("Tool succeeded: echo:hello"))).toBe(true);
+    });
     it("aggregates token usage across model calls", async () => {
         const registry = new ToolRegistry();
         registry.register(new EchoTool());

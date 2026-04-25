@@ -40,6 +40,28 @@ function responseUsage(response: LlmResponse, promptTokens: number): TokenUsage 
   };
 }
 
+function summarizeText(value: string, maxLength = 120): string {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  if (normalized.length <= maxLength) return normalized;
+  return `${normalized.slice(0, maxLength - 3)}...`;
+}
+
+function summarizeToolArguments(args: Record<string, unknown>): string {
+  const preferredKeys = ["path", "pattern", "query", "command", "old_string", "oldString", "include", "line", "character"];
+  const parts = preferredKeys
+    .filter((key) => args[key] !== undefined)
+    .map((key) => `${key}=${JSON.stringify(args[key])}`);
+
+  const selected = parts.length > 0 ? parts : Object.entries(args).slice(0, 3).map(([key, value]) => `${key}=${JSON.stringify(value)}`);
+  if (selected.length === 0) return "";
+  return summarizeText(selected.join(" "), 160);
+}
+
+function summarizeToolResult(result: ToolResult): string {
+  const status = result.ok ? "succeeded" : "failed";
+  return `Tool ${status}: ${summarizeText(result.output, 140)}`;
+}
+
 export async function runAgentLoop(params: AgentLoopParams): Promise<AgentResult> {
   let messages: ChatMessage[] = params.messages
     ? [...params.messages]
@@ -78,6 +100,7 @@ export async function runAgentLoop(params: AgentLoopParams): Promise<AgentResult
       role: "assistant",
       content: response.done ? response.text : `Thinking: ${response.text}`
     });
+    params.onStep?.(step, response.done ? "Model produced final answer" : `Model intent: ${summarizeText(response.text)}`);
 
     if (response.done) {
       return {
@@ -99,6 +122,10 @@ export async function runAgentLoop(params: AgentLoopParams): Promise<AgentResult
       };
     }
 
+    const toolArgsSummary = summarizeToolArguments(response.toolCall.arguments);
+    const requestedTool = toolArgsSummary
+      ? `${response.toolCall.name} (${toolArgsSummary})`
+      : response.toolCall.name;
     const tool = params.toolRegistry.get(response.toolCall.name);
     if (!tool) {
       const result: ToolResult = {
@@ -111,10 +138,11 @@ export async function runAgentLoop(params: AgentLoopParams): Promise<AgentResult
         role: "tool",
         content: formatToolObservation(response.toolCall.name, result)
       });
+      params.onStep?.(step, `Tool unavailable: ${requestedTool}`);
       continue;
     }
 
-    params.onStep?.(step, `Running tool ${tool.name}`);
+    params.onStep?.(step, `Calling tool: ${requestedTool}`);
     let result: ToolResult;
     try {
       result = await tool.run(response.toolCall.arguments);
@@ -128,6 +156,7 @@ export async function runAgentLoop(params: AgentLoopParams): Promise<AgentResult
       role: "tool",
       content: formatToolObservation(tool.name, result)
     });
+    params.onStep?.(step, summarizeToolResult(result));
   }
 
   return {
