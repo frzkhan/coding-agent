@@ -59,6 +59,7 @@ function shouldPersistStepInfo(info) {
         info.startsWith("Tool succeeded:") ||
         info.startsWith("Tool failed:") ||
         info.startsWith("Tool unavailable:") ||
+        info.startsWith("Auto-verified") ||
         info.startsWith("Rejected final answer:") ||
         info.startsWith("Model output invalid:") ||
         info.startsWith("Using raw model answer") ||
@@ -222,7 +223,10 @@ async function runChatSession(state) {
     const rl = createInterface({
         input,
         output,
-        completer: (line) => [getSlashCommandSuggestions(line), line]
+        completer(line) {
+            const completions = getSlashCommandSuggestions(line);
+            return [completions, line];
+        }
     });
     console.log(formatChatHeader(state));
     console.log(chalk.dim("Type a request. Session: /max N  /dryrun on|off  /config  /help  /reset  /tools  /exit\n"));

@@ -12,6 +12,14 @@ describe("parseAgentOutput", () => {
     expect(output.toolCall?.name).toBe("glob");
   });
 
+  it("parses tsDiagnostics tool calls", () => {
+    const output = parseAgentOutput(
+      '{"thought":"check","done":false,"final":"","toolCall":{"name":"tsDiagnostics","arguments":{"path":"src/cli.ts"}}}'
+    );
+    expect(output.toolCall?.name).toBe("tsDiagnostics");
+    expect(output.toolCall?.arguments).toEqual({ path: "src/cli.ts" });
+  });
+
   it("rejects tool calls that omit required arguments", () => {
     expect(() =>
       parseAgentOutput('{"thought":"searching","done":false,"final":"","toolCall":{"name":"search","arguments":{}}}')

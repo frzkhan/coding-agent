@@ -315,6 +315,9 @@ export class TsLanguageServerSession {
     async syncDocument(resolvedPath) {
         const text = await fs.readFile(resolvedPath, "utf8");
         const uri = pathToDocumentUri(resolvedPath);
+        // The next published diagnostics are for the content we are about to sync; do not merge with a
+        // pre-change "clean" result while we wait.
+        this.latestDiagnostics.delete(uri);
         const c = await this.ensureInit();
         const nextVersion = (this.documentVersions.get(uri) ?? 0) + 1;
         this.documentVersions.set(uri, nextVersion);
@@ -337,24 +340,56 @@ export class TsLanguageServerSession {
         }
         return uri;
     }
-    waitForDiagnostics(uri, timeoutMs) {
+    /**
+     * Wait until tsserver has had time to republish after didChange. It often sends an early empty
+     * `publishDiagnostics` and only later sends the real set (e.g. after parsing). We must not treat
+     * that first empty batch as final: debouncing the empty case caused false "no errors" in
+     * ~500ms. Only an all-clear after `maxWaitMs`, or a non-empty batch settled with a short debounce.
+     */
+    waitForDiagnostics(uri, maxWaitMs, quietWhenNonEmptyMs = 400) {
         return new Promise((resolve) => {
-            let latest;
-            const listener = (diagnostics) => {
-                latest = diagnostics;
-            };
-            const existing = this.diagnosticsWaiters.get(uri) ?? [];
-            existing.push(listener);
-            this.diagnosticsWaiters.set(uri, existing);
-            setTimeout(() => {
+            let latest = [];
+            let debounceTimer;
+            let maxTimer;
+            let finished = false;
+            const removeListener = () => {
                 const current = this.diagnosticsWaiters.get(uri) ?? [];
                 const filtered = current.filter((w) => w !== listener);
                 if (filtered.length)
                     this.diagnosticsWaiters.set(uri, filtered);
                 else
                     this.diagnosticsWaiters.delete(uri);
-                resolve(latest ?? this.latestDiagnostics.get(uri) ?? []);
-            }, timeoutMs);
+            };
+            const finish = (value) => {
+                if (finished)
+                    return;
+                finished = true;
+                if (debounceTimer)
+                    clearTimeout(debounceTimer);
+                if (maxTimer)
+                    clearTimeout(maxTimer);
+                removeListener();
+                resolve(value);
+            };
+            const listener = (diagnostics) => {
+                latest = diagnostics;
+                if (debounceTimer) {
+                    clearTimeout(debounceTimer);
+                    debounceTimer = undefined;
+                }
+                if (diagnostics.length > 0) {
+                    debounceTimer = setTimeout(() => {
+                        finish(this.latestDiagnostics.get(uri) ?? latest);
+                    }, quietWhenNonEmptyMs);
+                }
+                // Empty: do not finish on a short debounce; wait for maxWaitMs or a later non-empty publish.
+            };
+            const existing = this.diagnosticsWaiters.get(uri) ?? [];
+            existing.push(listener);
+            this.diagnosticsWaiters.set(uri, existing);
+            maxTimer = setTimeout(() => {
+                finish(this.latestDiagnostics.get(uri) ?? latest);
+            }, maxWaitMs);
         });
     }
     /** @param line — 1-based line index (editor-style). @param character — 0-based UTF-16 column (LSP). */
@@ -388,7 +423,7 @@ export class TsLanguageServerSession {
             return formatHoverContents(raw);
         });
     }
-    async diagnostics(filePath, timeoutMs = 1500) {
+    async diagnostics(filePath, timeoutMs = 10_000) {
         return this.runExclusive(async () => {
             const resolved = resolveInWorkspaceRoot(this.workspaceRoot, filePath);
             const uri = await this.syncDocument(resolved);

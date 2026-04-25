@@ -13,6 +13,8 @@ export type AgentLoopParams = {
   task?: string;
   messages?: ChatMessage[];
   contextTokenLimit?: number;
+  /** From `POST_EDIT_VERIFY` / config: run via `shell` after each successful writeFile/str_replace. */
+  postEditVerifyCommand?: string;
   onStep?: (step: number, info: string) => void;
   onModelChunk?: (step: number, chunk: string) => void;
 };
@@ -94,10 +96,6 @@ function finalClaimsWorkspaceChange(final: string): boolean {
 
 function isMutatingTool(name: string): boolean {
   return name === "writeFile" || name === "str_replace" || name === "shell";
-}
-
-function isTypeScriptFilePath(path: unknown): path is string {
-  return typeof path === "string" && /\.(tsx?|mts|cts|jsx?|mjs|cjs)$/i.test(path);
 }
 
 function invalidModelOutputReminder(error: LlmError): string {
@@ -282,31 +280,36 @@ export async function runAgentLoop(params: AgentLoopParams): Promise<AgentResult
     if (
       result.ok &&
       (tool.name === "writeFile" || tool.name === "str_replace") &&
-      isTypeScriptFilePath(response.toolCall.arguments.path)
+      typeof response.toolCall.arguments.path === "string" &&
+      response.toolCall.arguments.path.trim()
     ) {
-      const diagnosticsTool = params.toolRegistry.get("tsDiagnostics");
-      if (diagnosticsTool) {
-        const mutatedPath = response.toolCall.arguments.path;
-        let diagnosticsResult: ToolResult;
+      const mutatedPath = response.toolCall.arguments.path;
+      const verifyCmd = params.postEditVerifyCommand?.trim();
+      const shellTool = params.toolRegistry.get("shell");
+
+      if (verifyCmd && shellTool) {
+        let verifyResult: ToolResult;
         try {
-          diagnosticsResult = await diagnosticsTool.run({ path: mutatedPath });
+          verifyResult = await shellTool.run({ command: verifyCmd });
         } catch (error) {
-          diagnosticsResult = {
+          verifyResult = {
             ok: false,
             output: error instanceof Error ? error.message : String(error)
           };
         }
         messages.push({
           role: "tool",
-          content: `Auto-verification after ${tool.name} on ${mutatedPath}:\n${formatToolObservation(
-            "tsDiagnostics",
-            diagnosticsResult
+          content: `Auto-verification after ${tool.name} on ${mutatedPath} (${verifyCmd}):\n${formatToolObservation(
+            "shell",
+            verifyResult
           )}`
         });
-        params.onStep?.(
-          step,
-          `Auto-verified ${mutatedPath}: ${summarizeText(diagnosticsResult.output, 120)}`
-        );
+        params.onStep?.(step, `Post-edit verify: ${summarizeText(verifyResult.output, 120)}`);
+      } else if (verifyCmd && !shellTool) {
+        messages.push({
+          role: "user",
+          content: `[system] Post-edit verify is configured (${verifyCmd}) but the shell tool is not available (e.g. dry-run). Skipping.`
+        });
       }
     }
   }

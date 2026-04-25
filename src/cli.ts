@@ -34,6 +34,7 @@ type SessionState = {
   systemPrompt: string;
   llmClient: LlmClient;
   toolRegistry: ToolRegistry;
+  postEditVerifyCommand: string;
 };
 
 type RuntimeOptions = {
@@ -101,6 +102,7 @@ function shouldPersistStepInfo(info: string): boolean {
     info.startsWith("Tool succeeded:") ||
     info.startsWith("Tool failed:") ||
     info.startsWith("Tool unavailable:") ||
+    info.startsWith("Post-edit verify:") ||
     info.startsWith("Auto-verified") ||
     info.startsWith("Rejected final answer:") ||
     info.startsWith("Model output invalid:") ||
@@ -199,6 +201,7 @@ async function runSingleTurn(
     maxSteps: session.maxSteps,
     contextTokenLimit: session.contextTokenLimit,
     systemPrompt: session.systemPrompt,
+    postEditVerifyCommand: session.postEditVerifyCommand,
     task,
     messages: session.messages,
     onStep: (step, info) => {
@@ -266,6 +269,11 @@ function printSessionConfig(session: SessionState): void {
   console.log(chalk.dim(`maxSteps: ${session.maxSteps}`));
   console.log(chalk.dim(`contextTokenLimit: ${session.contextTokenLimit}`));
   console.log(chalk.dim(`dryRun: ${session.dryRun}`));
+  console.log(
+    chalk.dim(
+      `postEditVerify: ${session.postEditVerifyCommand ? session.postEditVerifyCommand : "(none — set POST_EDIT_VERIFY in .env)"}`
+    )
+  );
   console.log(chalk.dim(`tools: ${session.toolRegistry.listNames().join(", ")}`));
 }
 
@@ -369,6 +377,7 @@ async function runChatSession(state: SessionState): Promise<number> {
         state.llmClient = runtime.llmClient;
         state.toolRegistry = runtime.toolRegistry;
         state.systemPrompt = runtime.systemPrompt;
+        state.postEditVerifyCommand = config.postEditVerifyCommand;
         state.messages = [{ role: "system", content: state.systemPrompt }];
         console.log(
           chalk.green(
@@ -435,7 +444,8 @@ export async function runCli(argv: string[]): Promise<number> {
       model: config.model,
       systemPrompt: runtime.systemPrompt,
       llmClient: runtime.llmClient,
-      toolRegistry: runtime.toolRegistry
+      toolRegistry: runtime.toolRegistry,
+      postEditVerifyCommand: config.postEditVerifyCommand
     };
 
     if (shouldUseChat) {

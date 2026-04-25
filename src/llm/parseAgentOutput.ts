@@ -41,6 +41,18 @@ const toolCallSchema = z.discriminatedUnion("name", [
     })
   }),
   z.object({
+    name: z.literal("tsHover"),
+    arguments: z.object({
+      path: z.string().min(1),
+      line: z.number().int().min(1),
+      character: z.number().int().min(0)
+    })
+  }),
+  z.object({
+    name: z.literal("tsDiagnostics"),
+    arguments: z.object({ path: z.string().min(1) })
+  }),
+  z.object({
     name: z.literal("writeFile"),
     arguments: z.object({
       path: z.string().min(1),

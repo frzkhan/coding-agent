@@ -16,7 +16,8 @@ function outputPart(value: string | Buffer | undefined): string {
 export class ShellTool implements Tool {
   readonly name = "shell";
   readonly parameters = '{ "command": "allowed shell command" }';
-  readonly description = "Run an allowlisted shell command in the workspace.";
+  readonly description =
+    "Run a terminal command in the workspace (same idea as a generic run_terminal). Use this for verification and tasks the model infers from the repo: e.g. npm test, npx tsc, pytest, ruff, go test, cargo test. The command must match the allowlist prefix. Prefer scripts in package.json/pyproject.toml or instructions in CLAUDE.md or AGENTS.md when they exist.";
 
   constructor(
     private readonly workspaceRoot: string,

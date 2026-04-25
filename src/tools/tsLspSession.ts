@@ -390,10 +390,15 @@ export class TsLanguageServerSession {
 
   /**
    * Wait until tsserver has had time to republish after didChange. It often sends an early empty
-   * `publishDiagnostics` and then a second batch once checking finishes; a fixed short timeout can
-   * resolve after the first batch and report a false "no errors".
+   * `publishDiagnostics` and only later sends the real set (e.g. after parsing). We must not treat
+   * that first empty batch as final: debouncing the empty case caused false "no errors" in
+   * ~500ms. Only an all-clear after `maxWaitMs`, or a non-empty batch settled with a short debounce.
    */
-  private waitForDiagnostics(uri: string, maxWaitMs: number, quietMs = 500): Promise<LspDiagnostic[]> {
+  private waitForDiagnostics(
+    uri: string,
+    maxWaitMs: number,
+    quietWhenNonEmptyMs = 400
+  ): Promise<LspDiagnostic[]> {
     return new Promise((resolve) => {
       let latest: LspDiagnostic[] = [];
       let debounceTimer: ReturnType<typeof setTimeout> | undefined;
@@ -418,10 +423,16 @@ export class TsLanguageServerSession {
 
       const listener = (diagnostics: LspDiagnostic[]): void => {
         latest = diagnostics;
-        if (debounceTimer) clearTimeout(debounceTimer);
-        debounceTimer = setTimeout(() => {
-          finish(this.latestDiagnostics.get(uri) ?? latest);
-        }, quietMs);
+        if (debounceTimer) {
+          clearTimeout(debounceTimer);
+          debounceTimer = undefined;
+        }
+        if (diagnostics.length > 0) {
+          debounceTimer = setTimeout(() => {
+            finish(this.latestDiagnostics.get(uri) ?? latest);
+          }, quietWhenNonEmptyMs);
+        }
+        // Empty: do not finish on a short debounce; wait for maxWaitMs or a later non-empty publish.
       };
 
       const existing = this.diagnosticsWaiters.get(uri) ?? [];
@@ -467,7 +478,7 @@ export class TsLanguageServerSession {
     });
   }
 
-  async diagnostics(filePath: string, timeoutMs = 5000): Promise<string> {
+  async diagnostics(filePath: string, timeoutMs = 10_000): Promise<string> {
     return this.runExclusive(async () => {
       const resolved = resolveInWorkspaceRoot(this.workspaceRoot, filePath);
       const uri = await this.syncDocument(resolved);
