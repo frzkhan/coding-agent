@@ -41,7 +41,7 @@ export class OllamaClient implements LlmClient {
         schema: agentOutputSchema,
         schemaName: "AgentOutput",
         schemaDescription:
-          "Controller response for a coding agent. If done is false and toolCall is present, toolCall.arguments must include every required argument for the selected tool. For search, provide arguments.pattern."
+          "Controller response for a coding agent. If done is false and toolCall is present, toolCall.arguments must include every required argument for the selected tool. For search, provide arguments.pattern and/or arguments.allWords."
       });
 
       return {

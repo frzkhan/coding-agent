@@ -103,7 +103,7 @@ function invalidModelOutputReminder(error: LlmError): string {
     `The previous model response could not be parsed as the required agent JSON: ${error.message}`,
     "Return exactly one valid JSON object matching the agent schema.",
     "If you call a tool, include all required arguments for that specific tool in toolCall.arguments.",
-    'Example search call: {"thought":"searching","done":false,"final":"","toolCall":{"name":"search","arguments":{"pattern":"label","include":"src/**/*.ts"}}}'
+    'Example search: {"thought":"searching","done":false,"final":"","toolCall":{"name":"search","arguments":{"allWords":"progress step maxSteps","include":"src/**/*.ts"}}}'
   ].join("\n");
 }
 

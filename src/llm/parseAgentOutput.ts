@@ -12,13 +12,24 @@ const toolCallSchema = z.discriminatedUnion("name", [
   }),
   z.object({
     name: z.literal("search"),
-    arguments: z.object({
-      pattern: z.string().min(1),
-      include: z.string().optional(),
-      context: z.number().int().optional(),
-      maxResults: z.number().int().optional(),
-      caseInsensitive: z.boolean().optional()
-    })
+    arguments: z
+      .object({
+        pattern: z.string().optional(),
+        allWords: z.string().optional(),
+        literal: z.boolean().optional(),
+        include: z.string().optional(),
+        context: z.number().int().optional(),
+        maxResults: z.number().int().optional(),
+        caseInsensitive: z.boolean().optional()
+      })
+      .refine(
+        (a) => {
+          const p = typeof a.pattern === "string" ? a.pattern.trim() : "";
+          const w = typeof a.allWords === "string" ? a.allWords.trim() : "";
+          return p.length > 0 || w.length > 0;
+        },
+        { message: "search requires pattern and/or allWords" }
+      )
   }),
   z.object({
     name: z.literal("tsWorkspaceSymbols"),

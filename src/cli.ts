@@ -90,7 +90,7 @@ function wrapLogLine(value: string, width = terminalColumns()): string {
 }
 
 function formatPersistedStep(step: number, maxSteps: number, info: string): string {
-  const prefix = `Step ${step}/${maxSteps}: `;
+  const prefix = ``;
   const indent = " ".repeat(prefix.length);
   return wrapLogLine(`${prefix}${info}`).split("\n").map((line, index) => (index === 0 ? line : `${indent}${line}`)).join("\n");
 }
@@ -217,7 +217,7 @@ async function runSingleTurn(
 
       if (info.startsWith("Calling model")) {
         spinner?.start();
-        spinner!.text = spinnerStatus(`Step ${step}/${session.maxSteps}: thinking (${info.replace("Calling model with ", "")})`);
+        spinner!.text = spinnerStatus(`thinking (${info.replace("Calling model with ", "")})`);
         return;
       }
 

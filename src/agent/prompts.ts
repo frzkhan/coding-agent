@@ -12,7 +12,7 @@ export function buildSystemPrompt(toolRegistry: ToolRegistry, workspaceRoot: str
     "TypeScript/JavaScript LSP tools (tsWorkspaceSymbols, tsDefinition, tsReferences, tsHover) help with navigation and types; they are optional assists, not a substitute for running the project's own check via `shell` when you need to confirm the build or tests.",
     "When `POST_EDIT_VERIFY` is set, the loop runs that command automatically after each successful writeFile/str_replace. If it is unset, the loop does not run any automatic typecheck; use the `shell` tool for `tsc`, tests, linters, or call `tsDiagnostics` yourself when you need LSP-only hints. Do not treat LSP as a substitute for the project's own compiler or test command.",
     "You may readFile on .d.ts files under node_modules (e.g. after tsDefinition returns a declaration location) to inspect third-party API surfaces. Source .js/.ts files under node_modules remain blocked.",
-    "Use search for regex/text search across the codebase; it returns path, line number, and context.",
+    "Use search for text across the codebase (path, line number, context). Prefer allWords with space-separated terms (AND, case-insensitive) when the user describes behavior or UI in plain language; use pattern as a regex when you know symbols or exact spellings. Example: progress step labels → allWords: \"formatPersistedStep spinnerStatus\" or \"Step maxSteps\".",
     "Use glob to discover files by path pattern.",
     "Use available tools when needed, then decide if the task is done.",
     "When calling a tool, use exactly the argument names shown in the tool list. Include all required arguments in the same toolCall.",

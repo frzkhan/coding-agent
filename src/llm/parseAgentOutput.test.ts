@@ -26,6 +26,17 @@ describe("parseAgentOutput", () => {
     ).toThrow(LlmError);
   });
 
+  it("parses search with allWords only", () => {
+    const output = parseAgentOutput(
+      '{"thought":"s","done":false,"final":"","toolCall":{"name":"search","arguments":{"allWords":"progress step maxSteps","include":"src/**/*.ts"}}}'
+    );
+    expect(output.toolCall?.name).toBe("search");
+    expect(output.toolCall?.arguments).toMatchObject({
+      allWords: "progress step maxSteps",
+      include: "src/**/*.ts"
+    });
+  });
+
   it("parses JSON wrapped in markdown fences", () => {
     const output = parseAgentOutput(
       '```json\n{"thought":"done","done":true,"final":"finished"}\n```'
