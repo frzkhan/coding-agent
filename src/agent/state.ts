@@ -11,7 +11,7 @@ export type AgentTokenUsage = {
 
 export type AgentResult = {
   stopReason: AgentStopReason;
-
+  steps: number;
   finalResponse: string;
   messages: ChatMessage[];
   tokenUsage: AgentTokenUsage;

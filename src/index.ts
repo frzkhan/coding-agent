@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import "./aiSdkLogWarnings.js";
 import { runCli } from "./cli.js";
 
 main().catch((error: unknown) => {

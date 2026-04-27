@@ -13,8 +13,6 @@ export type AgentLoopParams = {
   task?: string;
   messages?: ChatMessage[];
   contextTokenLimit?: number;
-  /** From `POST_EDIT_VERIFY` / config: run via `shell` after each successful writeFile/str_replace. */
-  postEditVerifyCommand?: string;
   onStep?: (step: number, info: string) => void;
   onModelChunk?: (step: number, chunk: string) => void;
 };
@@ -276,42 +274,6 @@ export async function runAgentLoop(params: AgentLoopParams): Promise<AgentResult
       sawSuccessfulMutation = true;
     }
     params.onStep?.(step, summarizeToolResult(result));
-
-    if (
-      result.ok &&
-      (tool.name === "writeFile" || tool.name === "str_replace") &&
-      typeof response.toolCall.arguments.path === "string" &&
-      response.toolCall.arguments.path.trim()
-    ) {
-      const mutatedPath = response.toolCall.arguments.path;
-      const verifyCmd = params.postEditVerifyCommand?.trim();
-      const shellTool = params.toolRegistry.get("shell");
-
-      if (verifyCmd && shellTool) {
-        let verifyResult: ToolResult;
-        try {
-          verifyResult = await shellTool.run({ command: verifyCmd });
-        } catch (error) {
-          verifyResult = {
-            ok: false,
-            output: error instanceof Error ? error.message : String(error)
-          };
-        }
-        messages.push({
-          role: "tool",
-          content: `Auto-verification after ${tool.name} on ${mutatedPath} (${verifyCmd}):\n${formatToolObservation(
-            "shell",
-            verifyResult
-          )}`
-        });
-        params.onStep?.(step, `Post-edit verify: ${summarizeText(verifyResult.output, 120)}`);
-      } else if (verifyCmd && !shellTool) {
-        messages.push({
-          role: "user",
-          content: `[system] Post-edit verify is configured (${verifyCmd}) but the shell tool is not available (e.g. dry-run). Skipping.`
-        });
-      }
-    }
   }
 
   return {
