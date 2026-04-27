@@ -59,6 +59,7 @@ function shouldPersistStepInfo(info) {
         info.startsWith("Tool succeeded:") ||
         info.startsWith("Tool failed:") ||
         info.startsWith("Tool unavailable:") ||
+        info.startsWith("Post-edit verify:") ||
         info.startsWith("Auto-verified") ||
         info.startsWith("Rejected final answer:") ||
         info.startsWith("Model output invalid:") ||
@@ -144,6 +145,7 @@ async function runSingleTurn(session, task, useInteractiveUi, onStepOverride) {
         maxSteps: session.maxSteps,
         contextTokenLimit: session.contextTokenLimit,
         systemPrompt: session.systemPrompt,
+        postEditVerifyCommand: session.postEditVerifyCommand,
         task,
         messages: session.messages,
         onStep: (step, info) => {
@@ -203,6 +205,7 @@ function printSessionConfig(session) {
     console.log(chalk.dim(`maxSteps: ${session.maxSteps}`));
     console.log(chalk.dim(`contextTokenLimit: ${session.contextTokenLimit}`));
     console.log(chalk.dim(`dryRun: ${session.dryRun}`));
+    console.log(chalk.dim(`postEditVerify: ${session.postEditVerifyCommand ? session.postEditVerifyCommand : "(none — set POST_EDIT_VERIFY in .env)"}`));
     console.log(chalk.dim(`tools: ${session.toolRegistry.listNames().join(", ")}`));
 }
 export function resolveCliModes(params) {
@@ -291,6 +294,7 @@ async function runChatSession(state) {
                 state.llmClient = runtime.llmClient;
                 state.toolRegistry = runtime.toolRegistry;
                 state.systemPrompt = runtime.systemPrompt;
+                state.postEditVerifyCommand = config.postEditVerifyCommand;
                 state.messages = [{ role: "system", content: state.systemPrompt }];
                 console.log(chalk.green(`dryRun ${state.dryRun ? "enabled" : "disabled"}. Session context reset for tool safety.`));
                 continue;
@@ -341,7 +345,8 @@ export async function runCli(argv) {
             model: config.model,
             systemPrompt: runtime.systemPrompt,
             llmClient: runtime.llmClient,
-            toolRegistry: runtime.toolRegistry
+            toolRegistry: runtime.toolRegistry,
+            postEditVerifyCommand: config.postEditVerifyCommand
         };
         if (shouldUseChat) {
             return runChatSession(state);

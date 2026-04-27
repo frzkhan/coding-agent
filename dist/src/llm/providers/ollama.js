@@ -21,7 +21,10 @@ export class OllamaClient {
         this.provider = createOpenAICompatible({
             name: "ollama",
             baseURL: `${params.baseUrl.replace(/\/$/, "")}/v1`,
-            supportsStructuredOutputs: true
+            // Ollama maps strict json_schema to grammar decoding; many models (e.g. qwen3)
+            // error with "failed to load model vocabulary required for format". json_object
+            // works; generateObject still guides the model and we recover via parseAgentOutput.
+            supportsStructuredOutputs: false
         });
     }
     async generate(messages, _options = {}) {

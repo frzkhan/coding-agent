@@ -10,7 +10,7 @@ export class ShellTool {
     timeoutMs;
     name = "shell";
     parameters = '{ "command": "allowed shell command" }';
-    description = "Run an allowlisted shell command in the workspace.";
+    description = "Run a terminal command in the workspace (same idea as a generic run_terminal). Use this for verification and tasks the model infers from the repo: e.g. npm test, npx tsc, pytest, ruff, go test, cargo test. The command must match the allowlist prefix. Prefer scripts in package.json/pyproject.toml or instructions in CLAUDE.md or AGENTS.md when they exist.";
     constructor(workspaceRoot, allowlist, timeoutMs) {
         this.workspaceRoot = workspaceRoot;
         this.allowlist = allowlist;
